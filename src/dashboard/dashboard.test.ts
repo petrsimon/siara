@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Assignment } from "../types.js";
+import type { Assignment, Override } from "../types.js";
 import { computeMetrics, generateDashboard } from "./index.js";
 
 function assignment(
@@ -117,6 +117,84 @@ describe("computeMetrics", () => {
   it("returns giniWork 0 for an empty log", () => {
     expect(computeMetrics([]).giniWork).toBe(0);
   });
+
+  it("reports full acceptance when there are no overrides", () => {
+    const metrics = computeMetrics([
+      assignment({ assignees: ["alice"], band: "simple", pr: 1 }),
+      assignment({ assignees: ["bob"], band: "moderate", pr: 2 }),
+    ]);
+    expect(metrics.assignedPrs).toBe(2);
+    expect(metrics.overriddenPrs).toBe(0);
+    expect(metrics.acceptanceRate).toBe(1);
+  });
+
+  it("counts overridden PRs and lowers the acceptance rate", () => {
+    const overrides: Override[] = [
+      { seenAt: "2026-01-16", repo: "org/repo", pr: 1, suggested: ["alice"], actual: ["bob"] },
+    ];
+    const metrics = computeMetrics(
+      [
+        assignment({ assignees: ["alice"], band: "simple", pr: 1 }),
+        assignment({ assignees: ["bob"], band: "moderate", pr: 2 }),
+      ],
+      overrides,
+    );
+    expect(metrics.overriddenPrs).toBe(1);
+    expect(metrics.acceptanceRate).toBe(0.5);
+  });
+
+  it("ignores overrides for PRs Siara never assigned", () => {
+    const overrides: Override[] = [
+      { seenAt: "2026-01-16", repo: "org/repo", pr: 99, suggested: [], actual: ["bob"] },
+    ];
+    const metrics = computeMetrics(
+      [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],
+      overrides,
+    );
+    expect(metrics.overriddenPrs).toBe(0);
+    expect(metrics.acceptanceRate).toBe(1);
+  });
+
+  it("treats an empty log as full acceptance (no divide-by-zero)", () => {
+    const metrics = computeMetrics([]);
+    expect(metrics.assignedPrs).toBe(0);
+    expect(metrics.acceptanceRate).toBe(1);
+  });
+
+  it("splits each reviewer's assignments by difficulty band", () => {
+    const metrics = computeMetrics([
+      assignment({ assignees: ["alice"], band: "simple", pr: 1 }),
+      assignment({ assignees: ["alice"], band: "hard", pr: 2 }),
+      assignment({ assignees: ["alice"], band: "hard", pr: 3 }),
+      assignment({ assignees: ["bob"], band: "moderate", pr: 4 }),
+    ]);
+    expect(metrics.bandByPerson.alice).toEqual({ simple: 1, moderate: 0, hard: 2 });
+    expect(metrics.bandByPerson.bob).toEqual({ simple: 0, moderate: 1, hard: 0 });
+  });
+
+  it("buckets assignments into ISO weeks (Monday start), oldest first", () => {
+    const metrics = computeMetrics([
+      // 2026-01-15 is a Thursday → week of Mon 2026-01-12.
+      assignment({ assignees: ["alice"], band: "simple", pr: 1, date: "2026-01-15" }),
+      assignment({ assignees: ["bob"], band: "simple", pr: 2, date: "2026-01-12" }),
+      // 2026-01-19 is the next Monday → its own week.
+      assignment({ assignees: ["carol"], band: "simple", pr: 3, date: "2026-01-19" }),
+    ]);
+    expect(metrics.weeklyTrend).toEqual([
+      { week: "2026-01-12", count: 2 },
+      { week: "2026-01-19", count: 1 },
+    ]);
+  });
+
+  it("counts reviews per reviewer per week for the heatmap", () => {
+    const metrics = computeMetrics([
+      assignment({ assignees: ["alice"], band: "simple", pr: 1, date: "2026-01-12" }),
+      assignment({ assignees: ["alice"], band: "hard", pr: 2, date: "2026-01-15" }),
+      assignment({ assignees: ["bob"], band: "simple", pr: 3, date: "2026-01-19" }),
+    ]);
+    expect(metrics.weekByPerson.alice).toEqual({ "2026-01-12": 2 });
+    expect(metrics.weekByPerson.bob).toEqual({ "2026-01-19": 1 });
+  });
 });
 
 describe("generateDashboard", () => {
@@ -180,5 +258,114 @@ describe("generateDashboard", () => {
 
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+
+  it("renders the manual-override section with the acceptance KPI", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["alice"], band: "hard", pr: 7 })],
+      overrides: [
+        { seenAt: "2026-08-24", repo: "org/repo", pr: 7, suggested: ["alice"], actual: ["bob"] },
+      ],
+      generatedAtIso,
+    });
+
+    expect(html).toContain("Suggestion acceptance");
+    expect(html).toContain("Manual overrides");
+    expect(html).toContain("org/repo#7");
+    expect(html).toContain("0%");
+  });
+
+  it("renders SVG charts and a theme toggle for light/dark", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
+        assignment({ assignees: ["bob"], band: "simple", pr: 2 }),
+      ],
+      generatedAtIso,
+    });
+
+    expect(html).toContain("<svg");
+    expect(html).toContain('data-theme');
+    expect(html).toContain('[data-theme="dark"]');
+    expect(html).toContain("__toggleTheme");
+    // Band segments are colour-keyed via CSS variables.
+    expect(html).toContain("var(--band-hard)");
+  });
+
+  it("renders the activity heatmap and scrollable full-history charts", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "hard", pr: 1, date: "2026-01-12" }),
+        assignment({ assignees: ["bob"], band: "simple", pr: 2, date: "2026-01-19" }),
+      ],
+      generatedAtIso,
+    });
+    expect(html).toContain("Activity heatmap");
+    expect(html).toContain("scroll-latest");
+    expect(html).toContain("scrollLeft");
+  });
+
+  it("renders a reviewer roster list with per-band counts", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
+        assignment({ assignees: ["alice"], band: "simple", pr: 2 }),
+        assignment({ assignees: ["bob"], band: "moderate", pr: 3 }),
+      ],
+      generatedAtIso,
+    });
+    expect(html).toContain("Reviewers");
+    expect(html).toContain("<th>Total</th>");
+    expect(html).toContain("alice");
+    expect(html).toContain("bob");
+  });
+
+  it("renders the open-PRs age overview and per-reviewer waiting stats", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["bob"], band: "hard", pr: 7 })],
+      openPrs: {
+        takenAt: "2026-08-25T09:00:00.000Z",
+        prs: [
+          {
+            repo: "org/repo",
+            pr: 7,
+            title: "Add auth guard",
+            author: "alice",
+            assignees: ["bob"],
+            ageDays: 6,
+            band: "hard",
+            staleness: "overdue",
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+    expect(html).toContain("Open PRs");
+    expect(html).toContain("Add auth guard");
+    expect(html).toContain("6d");
+    expect(html).toContain("overdue");
+    expect(html).toContain("Waiting on reviewers");
+    expect(html).toContain("Oldest");
+  });
+
+  it("shows empty states for open-PRs sections without a snapshot", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],
+      generatedAtIso,
+    });
+    expect(html).toContain("No open PRs in the latest snapshot.");
+  });
+
+  it("shows PR difficulty metadata in the manual-override row", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["alice"], band: "hard", pr: 7, difficulty: 0.72 })],
+      overrides: [
+        { seenAt: "2026-08-24", repo: "org/repo", pr: 7, suggested: ["alice"], actual: ["bob"] },
+      ],
+      generatedAtIso,
+    });
+    expect(html).toContain("<th>Difficulty</th>");
+    expect(html).toContain("Hard");
+    expect(html).toContain("0.72");
   });
 });
