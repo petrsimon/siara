@@ -84,6 +84,13 @@ export interface SiaraTeamConfig {
     overdueDays: number;
   };
   syncWindowDays: number;
+  /**
+   * A PR touching more than this many files is flagged "giant" during sync and
+   * reported (not capped). Giant PRs dominate commit-history API cost — one
+   * `gh api commits` call per changed path — so surfacing them lets the operator
+   * split the PR or accept the cost knowingly. No silent truncation.
+   */
+  giantPrFileThreshold: number;
 }
 
 /** Per-repo overrides — partial, inherits team defaults. */
@@ -158,6 +165,7 @@ export const DEFAULT_TEAM_CONFIG: Omit<SiaraTeamConfig, "roster"> = {
     overdueDays: 5,
   },
   syncWindowDays: 90,
+  giantPrFileThreshold: 40,
 };
 
 /**

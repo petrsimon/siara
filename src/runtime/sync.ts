@@ -5,7 +5,7 @@
 import type { GitHubAdapter } from "../adapters/index.js";
 import type { PullRequest } from "../types.js";
 import { subtractDays } from "./dates.js";
-import type { SiaraDeps, SyncResult } from "./index.js";
+import type { GiantPr, SiaraDeps, SyncResult } from "./index.js";
 
 /** GitHub may return path→login or login→path; store expects login→path. */
 function normalizeCommitHistory(
@@ -30,12 +30,19 @@ function normalizeCommitHistory(
   return byLogin;
 }
 
+/**
+ * Collect the deduped set of file paths changed across open PRs, and flag any PR
+ * whose file count exceeds `giantThreshold`. Giant PRs are reported, never
+ * capped — every changed path still contributes to the commit-history fetch.
+ */
 async function gatherChangedPaths(
   github: GitHubAdapter,
   repo: string,
   prs: PullRequest[],
-): Promise<string[]> {
+  giantThreshold: number,
+): Promise<{ paths: string[]; giantPrs: GiantPr[] }> {
   const paths = new Set<string>();
+  const giantPrs: GiantPr[] = [];
   for (const pr of prs) {
     let files = pr.files;
     if (files.length === 0) {
@@ -44,8 +51,11 @@ async function gatherChangedPaths(
     for (const file of files) {
       paths.add(file.path);
     }
+    if (files.length > giantThreshold) {
+      giantPrs.push({ pr: pr.number, author: pr.author, fileCount: files.length });
+    }
   }
-  return [...paths];
+  return { paths: [...paths], giantPrs };
 }
 
 export async function sync(
@@ -54,6 +64,12 @@ export async function sync(
 ): Promise<SyncResult[]> {
   const results: SyncResult[] = [];
   const roster = deps.teamConfig.roster;
+  const giantThreshold = deps.teamConfig.giantPrFileThreshold;
+
+  // Open review load is per-login and global, not per-repo — fetch it once
+  // (roster-many search calls) instead of redundantly inside the repo loop.
+  const openLoad = await deps.github.getOpenReviewLoad(roster);
+  await deps.store.upsertOpenLoad(openLoad);
 
   for (const repo of deps.repos) {
     const lastSyncAt = await deps.store.getLastSyncAt(repo);
@@ -63,7 +79,12 @@ export async function sync(
       : lastSyncAt;
 
     const openPrs = await deps.github.listOpenPullRequests(repo);
-    const paths = await gatherChangedPaths(deps.github, repo, openPrs);
+    const { paths, giantPrs } = await gatherChangedPaths(
+      deps.github,
+      repo,
+      openPrs,
+      giantThreshold,
+    );
 
     const commitHistory = await deps.github.getCommitHistory(
       repo,
@@ -78,9 +99,6 @@ export async function sync(
     const reviewHistory = await deps.github.getReviewHistory(repo, sinceIso);
     await deps.store.upsertReviewHistory(repo, reviewHistory);
 
-    const openLoad = await deps.github.getOpenReviewLoad(roster);
-    await deps.store.upsertOpenLoad(openLoad);
-
     const jiraKeys = new Set<string>();
     for (const pr of openPrs) {
       if (pr.jiraKey) {
@@ -93,7 +111,7 @@ export async function sync(
     }
 
     await deps.store.setLastSyncAt(repo, nowIso);
-    results.push({ repo, coldStart, syncedAtIso: nowIso });
+    results.push({ repo, coldStart, syncedAtIso: nowIso, giantPrs });
   }
 
   return results;

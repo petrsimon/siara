@@ -22,11 +22,20 @@ export interface SiaraDeps {
   repos: string[];
 }
 
+/** An open PR flagged for touching an unusually large number of files. */
+export interface GiantPr {
+  pr: number;
+  author: string;
+  fileCount: number;
+}
+
 export interface SyncResult {
   repo: string;
   /** True = full cold-start sync; false = incremental. */
   coldStart: boolean;
   syncedAtIso: string;
+  /** Open PRs exceeding teamConfig.giantPrFileThreshold (reported, not capped). */
+  giantPrs: GiantPr[];
 }
 
 export interface DailyOptions {

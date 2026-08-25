@@ -18,3 +18,8 @@ siara.config.json
 dashboard.html
 public/
 .staticrypt.json
+siara.db*
+siara.*.config.json
+*.db
+*.db-shm
+*.db-wal

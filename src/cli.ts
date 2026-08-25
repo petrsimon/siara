@@ -95,6 +95,11 @@ async function main(): Promise<void> {
           for (const r of results) {
             const mode = r.coldStart ? "cold start" : "incremental";
             console.log(`  ${r.repo} (${mode}) @ ${r.syncedAtIso}`);
+            for (const g of r.giantPrs) {
+              console.warn(
+                `    ⚠ giant PR #${g.pr} by ${g.author} — ${g.fileCount} files (heavy commit-history cost; consider splitting)`,
+              );
+            }
           }
         }
         break;
@@ -104,6 +109,11 @@ async function main(): Promise<void> {
         for (const s of result.synced) {
           const mode = s.coldStart ? "cold start" : "incremental";
           console.log(`Synced ${s.repo} (${mode})`);
+          for (const g of s.giantPrs) {
+            console.warn(
+              `  ⚠ giant PR #${g.pr} by ${g.author} — ${g.fileCount} files`,
+            );
+          }
         }
         if (result.assigned.length === 0) {
           console.log("No PRs assigned.");

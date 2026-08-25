@@ -83,7 +83,7 @@ describe("sync", () => {
     const results = await sync(deps, NOW);
 
     expect(results).toEqual([
-      { repo: REPO, coldStart: true, syncedAtIso: NOW },
+      { repo: REPO, coldStart: true, syncedAtIso: NOW, giantPrs: [] },
     ]);
     expect(await store.getLastSyncAt(REPO)).toBe(NOW);
 
@@ -108,9 +108,26 @@ describe("sync", () => {
     const second = await sync(deps, LATER);
 
     expect(second).toEqual([
-      { repo: REPO, coldStart: false, syncedAtIso: LATER },
+      { repo: REPO, coldStart: false, syncedAtIso: LATER, giantPrs: [] },
     ]);
     expect(await store.getLastSyncAt(REPO)).toBe(LATER);
+  });
+
+  it("flags (but does not cap) a PR exceeding the giant-PR file threshold", async () => {
+    const bigFiles = Array.from({ length: 45 }, (_, i) =>
+      file(`src/mod${i}.ts`, 3, 1),
+    );
+    const pr = pullRequest({ number: 7, author: "author", files: bigFiles });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pr] },
+    });
+    const deps = makeDeps(github, store);
+
+    const [result] = await sync(deps, NOW);
+
+    expect(result?.giantPrs).toEqual([
+      { pr: 7, author: "author", fileCount: 45 },
+    ]);
   });
 });
 
