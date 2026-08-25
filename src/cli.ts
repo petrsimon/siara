@@ -4,6 +4,7 @@
  */
 import type { JiraAdapter } from "./adapters/index.js";
 import { GhCliGitHubAdapter } from "./adapters/github.js";
+import { LocalGitGitHubAdapter } from "./adapters/localGit.js";
 import { loadConfig } from "./config-loader.js";
 import { generateDashboard } from "./dashboard/index.js";
 import { daily, dryRun, sync } from "./runtime/index.js";
@@ -79,7 +80,20 @@ async function main(): Promise<void> {
     await store.init();
 
     const { teamConfig, repoConfigs, repos } = loadConfig();
-    const github = new GhCliGitHubAdapter({ dryLog: command === "dry-run" });
+    const base = new GhCliGitHubAdapter({ dryLog: command === "dry-run" });
+
+    // Read commit history from local clones where configured (much cheaper than
+    // the commits API); everything else still goes through gh.
+    const localPaths: Record<string, string> = {};
+    for (const rc of repoConfigs) {
+      if (rc.localPath) {
+        localPaths[rc.repo] = rc.localPath;
+      }
+    }
+    const github =
+      Object.keys(localPaths).length > 0
+        ? new LocalGitGitHubAdapter(base, localPaths, teamConfig.identityMap)
+        : base;
     const deps = {
       store,
       github,

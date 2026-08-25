@@ -85,6 +85,14 @@ export interface SiaraTeamConfig {
   };
   syncWindowDays: number;
   /**
+   * Maps a git author email (or name) to a roster GitHub login, so the local-git
+   * commit provider can attribute `git log` authorship — which carries emails,
+   * not logins — to the right reviewer. GitHub noreply emails
+   * ("ID+login@users.noreply.github.com") are decoded automatically and need no
+   * entry. Unmapped authors are ignored (they're off-roster anyway).
+   */
+  identityMap: Record<string, string>;
+  /**
    * A PR touching more than this many files is flagged "giant" during sync and
    * reported (not capped). Giant PRs dominate commit-history API cost — one
    * `gh api commits` call per changed path — so surfacing them lets the operator
@@ -97,6 +105,13 @@ export interface SiaraTeamConfig {
 export interface SiaraRepoConfig {
   repo: string;
   blocklist?: string[];
+  /**
+   * Absolute path to a local clone. When set, commit history is read from
+   * `git log` here instead of the GitHub commits API — far cheaper (one process
+   * vs one API call per changed path). Keep the clone fetched; stale clones miss
+   * recent authorship. Reviews/PRs/load still come from GitHub.
+   */
+  localPath?: string;
   reviewersPerPr?: number;
   difficulty?: Partial<SiaraTeamConfig["difficulty"]>;
   filesAtRisk?: Partial<SiaraTeamConfig["filesAtRisk"]>;
@@ -165,6 +180,7 @@ export const DEFAULT_TEAM_CONFIG: Omit<SiaraTeamConfig, "roster"> = {
     overdueDays: 5,
   },
   syncWindowDays: 90,
+  identityMap: {},
   giantPrFileThreshold: 40,
 };
 

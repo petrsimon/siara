@@ -99,6 +99,36 @@ config and build trust before going live.
 Environment: `SIARA_CONFIG` (default `./siara.config.json`), `SIARA_DB`
 (default `./siara.db`).
 
+`sync` is the slow step. Pass `--no-sync` to `dry-run`/`daily` to score from the
+last-synced signals (open PRs are still listed fresh) — turns a multi-minute
+round trip into ~2s while iterating on scoring or config.
+
+### Faster commit history from local clones
+
+The dominant sync cost is the commits API: one request per changed path. If you
+already have a repo cloned, point Siara at it and it reads authorship from
+`git log` in one pass instead — minutes become sub-second. Reviews, open PRs, and
+review load still come from `gh` (they don't exist in a clone).
+
+```jsonc
+{
+  "team": {
+    "roster": ["octocat", "hubot"],
+    // git records author *emails*, not GitHub logins — map them:
+    "identityMap": { "octo@example.com": "octocat", "hubot@example.com": "hubot" }
+  },
+  "repos": [
+    { "repo": "my-org/my-repo", "localPath": "/abs/path/to/clone" }
+  ]
+}
+```
+
+GitHub noreply emails (`ID+login@users.noreply.github.com`) are decoded
+automatically. Add every email a teammate commits under (people often mix a work
+and a personal address); unmapped authors are ignored. **Keep the clone fetched**
+— a stale clone misses recent authorship. If `localPath` is missing or not a git
+repo, Siara falls back to the API for that repo.
+
 ### Publishing the dashboard (GitHub Pages)
 
 `.github/workflows/dashboard.yml` builds the dashboard from the git-tracked

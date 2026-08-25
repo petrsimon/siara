@@ -100,6 +100,10 @@ function mergeTeamConfig(
       // Keep default rules unless the operator explicitly supplies their own.
       rules: partial.pathRisk?.rules ?? DEFAULT_TEAM_CONFIG.pathRisk.rules,
     },
+    identityMap: {
+      ...DEFAULT_TEAM_CONFIG.identityMap,
+      ...partial.identityMap,
+    },
     soft: {
       ...DEFAULT_TEAM_CONFIG.soft,
       ...partial.soft,
