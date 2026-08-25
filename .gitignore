@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+
+# Operational DB — rebuilt from APIs on cold start
+siara.db
+siara.db-*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
