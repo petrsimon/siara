@@ -1,4 +1,4 @@
-import type { DifficultyBand, OpenPrSnapshot, ReviewResponse } from "../types.js";
+import type { Assignment, DifficultyBand, OpenPrSnapshot, ReviewResponse } from "../types.js";
 import type { DashboardInput, DashboardMetrics } from "./index.js";
 import { buildMetrics } from "./metrics.js";
 import { escapeHtml } from "./html.js";
@@ -18,7 +18,9 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const rosterSection = renderRosterSection(metrics);
   const difficultyChart = renderDifficultyDonut(metrics);
   const trendChart = renderTrendChart(metrics);
-  const heatmap = renderHeatmap(metrics);
+  const heatmap = renderHeatmap(input.assignments);
+  const sankeySection = renderSankey(metrics);
+  const flameSection = renderFlame(metrics);
   const openPrs = input.openPrs?.prs ?? [];
   const waitingSection = renderWaitingSection(openPrs);
   const responseSection = renderResponseSection(input.responseTimes?.responses ?? []);
@@ -62,6 +64,12 @@ ${STYLES}
       <button id="theme-btn" class="theme-btn" type="button" aria-label="Toggle theme" onclick="__toggleTheme()">☾</button>
     </header>
 
+    <nav class="tabs" role="tablist">
+      <button class="tab active" type="button" data-tab="overview">Dashboard</button>
+      <button class="tab" type="button" data-tab="open-prs">Open PRs</button>
+    </nav>
+
+    <div class="tab-panel" id="tab-overview">
     <div class="kpi-row">
       <div class="kpi">
         <div class="kpi-label">Total assignments</div>
@@ -105,18 +113,25 @@ ${STYLES}
     </div>
 
     <section>
-      <h2>Activity heatmap</h2>
-      <p class="section-hint">Reviews per reviewer per week — darker = busier. Scroll left to page back.</p>
+      <h2>Reviewer × repo</h2>
+      <p class="section-hint">Assignments per reviewer per repository — darker = more. Scroll right for more repos.</p>
       ${heatmap}
     </section>
 
-    ${openPrsSection}
+    ${sankeySection}
+
+    ${flameSection}
 
     ${waitingSection}
 
     ${responseSection}
 
     ${overridesSection}
+    </div>
+
+    <div class="tab-panel hidden" id="tab-open-prs">
+    ${openPrsSection}
+    </div>
 
     <footer>Generated at ${generatedAt}</footer>
   </div>
@@ -134,6 +149,66 @@ ${STYLES}
     // Scroll full-history charts to the latest (rightmost) week on load.
     for (var el of document.querySelectorAll(".scroll-latest")) {
       el.scrollLeft = el.scrollWidth;
+    }
+    // Tabs: show one panel at a time.
+    for (var tab of document.querySelectorAll(".tab")) {
+      (function (tab) {
+        tab.addEventListener("click", function () {
+          var name = tab.getAttribute("data-tab");
+          for (var t of document.querySelectorAll(".tab")) {
+            t.classList.toggle("active", t === tab);
+          }
+          for (var p of document.querySelectorAll(".tab-panel")) {
+            p.classList.toggle("hidden", p.id !== "tab-" + name);
+          }
+        });
+      })(tab);
+    }
+    // Sortable tables: click a header to sort (toggles asc/desc). Numeric columns
+    // sort on a data-val attribute when the display text differs from the value.
+    for (var table of document.querySelectorAll("table.sortable")) {
+      (function (table) {
+        var ths = table.tHead.rows[0].cells;
+        var dir = 1;
+        var active = -1;
+        for (var i = 0; i < ths.length; i++) {
+          (function (idx, th) {
+            th.style.cursor = "pointer";
+            th.addEventListener("click", function () {
+              dir = active === idx ? -dir : 1;
+              active = idx;
+              var type = th.getAttribute("data-sort") || "text";
+              var rows = Array.prototype.slice.call(table.tBodies[0].rows);
+              rows.sort(function (a, b) {
+                var ca = a.cells[idx], cb = b.cells[idx];
+                var va = ca.getAttribute("data-val");
+                if (va === null) va = ca.textContent.trim();
+                var vb = cb.getAttribute("data-val");
+                if (vb === null) vb = cb.textContent.trim();
+                if (type === "num") return (parseFloat(va) - parseFloat(vb)) * dir;
+                return va.localeCompare(vb) * dir;
+              });
+              for (var r of rows) table.tBodies[0].appendChild(r);
+              for (var k = 0; k < ths.length; k++) ths[k].removeAttribute("data-dir");
+              th.setAttribute("data-dir", dir > 0 ? "asc" : "desc");
+            });
+          })(i, ths[i]);
+        }
+      })(table);
+    }
+    // Table search: live-filter rows of the targeted table by substring.
+    for (var inp of document.querySelectorAll(".table-search")) {
+      (function (input) {
+        var t = document.getElementById(input.getAttribute("data-target"));
+        if (!t) return;
+        input.addEventListener("input", function () {
+          var q = input.value.toLowerCase();
+          for (var row of t.tBodies[0].rows) {
+            row.style.display =
+              row.textContent.toLowerCase().indexOf(q) >= 0 ? "" : "none";
+          }
+        });
+      })(inp);
     }
 </script>
 </body>
@@ -262,62 +337,245 @@ function renderTrendChart(metrics: DashboardMetrics): string {
 }
 
 /**
- * Reviewer × week activity heatmap — who reviewed when. Cell intensity scales
- * with that reviewer's assignment count in the week. Scrolls horizontally with
- * the same full-history semantics as the weekly trend.
+ * Reviewer × repo heatmap — who covers which repository. Cell intensity (and the
+ * inline count) scales with that reviewer's assignment count in the repo. Repos
+ * are columns (short name), reviewers rows sorted by total volume.
  */
-function renderHeatmap(metrics: DashboardMetrics): string {
-  const weeks = metrics.weeklyTrend.map((w) => w.week);
-  const reviewers = Object.entries(metrics.reviewsPerPerson)
-    .sort(([la, ca], [lb, cb]) => (cb !== ca ? cb - ca : la.localeCompare(lb)))
+function renderHeatmap(assignments: Assignment[]): string {
+  const count = new Map<string, Map<string, number>>();
+  const repos = new Set<string>();
+  for (const a of assignments) {
+    for (const login of a.assignees) {
+      repos.add(a.repo);
+      const m = count.get(login) ?? new Map<string, number>();
+      m.set(a.repo, (m.get(a.repo) ?? 0) + 1);
+      count.set(login, m);
+    }
+  }
+  const repoList = [...repos].sort();
+  const reviewers = [...count.entries()]
+    .map(([login, m]) => [login, [...m.values()].reduce((s, v) => s + v, 0)] as const)
+    .sort((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0].localeCompare(b[0])))
     .map(([login]) => login);
 
-  if (weeks.length === 0 || reviewers.length === 0) {
+  if (repoList.length === 0 || reviewers.length === 0) {
     return `<p class="empty">No assignments yet.</p>`;
   }
 
   let maxCell = 1;
-  for (const login of reviewers) {
-    for (const wk of weeks) {
-      const v = metrics.weekByPerson[login]?.[wk] ?? 0;
-      if (v > maxCell) maxCell = v;
-    }
+  for (const m of count.values()) {
+    for (const v of m.values()) if (v > maxCell) maxCell = v;
   }
 
-  const labelW = 130;
+  const labelW = 140;
   const cell = 28;
   const cgap = 10;
   const rowH = cell + cgap;
-  const W = labelW + weeks.length * rowH;
-  const H = reviewers.length * rowH + 22; // + week tick row
+  const labelH = 96; // rotated repo labels below the grid
+  const W = labelW + repoList.length * rowH;
+  const H = reviewers.length * rowH + labelH;
+  const short = (r: string): string => r.split("/").pop() ?? r;
 
   const rows = reviewers
-    .map((login, r) => {
-      const y = r * rowH;
+    .map((login, rI) => {
+      const y = rI * rowH;
+      const m = count.get(login);
       const label = `<text x="${labelW - 10}" y="${y + cell / 2}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(login)}</text>`;
-      const cells = weeks
-        .map((wk, c) => {
-          const v = metrics.weekByPerson[login]?.[wk] ?? 0;
-          const x = labelW + c * rowH;
-          // 0 → faint track; >0 → accent at opacity scaled by intensity.
-          const op = v === 0 ? 0 : 0.2 + 0.8 * (v / maxCell);
+      const cells = repoList
+        .map((repo, cI) => {
+          const v = m?.get(repo) ?? 0;
+          const x = labelW + cI * rowH;
+          const intensity = v / maxCell;
+          const op = v === 0 ? 0 : 0.2 + 0.8 * intensity;
           const fill = v === 0 ? "var(--border)" : "var(--accent)";
-          return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="4" fill="${fill}" fill-opacity="${fmt(op)}"><title>${escapeHtml(login)} · week of ${escapeHtml(wk)}: ${v}</title></rect>`;
+          const num =
+            v > 0
+              ? `<text x="${x + cell / 2}" y="${y + cell / 2}" class="heat-num" fill="${intensity > 0.55 ? "#fff" : "var(--text)"}" text-anchor="middle" dominant-baseline="central">${v}</text>`
+              : "";
+          return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="4" fill="${fill}" fill-opacity="${fmt(op)}"><title>${escapeHtml(login)} · ${escapeHtml(repo)}: ${v}</title></rect>${num}`;
         })
         .join("");
       return label + cells;
     })
     .join("");
 
-  const ticks = weeks
-    .map((wk, c) => {
-      const x = labelW + c * rowH + cell / 2;
-      return `<text x="${fmt(x)}" y="${reviewers.length * rowH + 14}" class="svg-tick" text-anchor="middle">${escapeHtml(wk.slice(5))}</text>`;
+  const ticks = repoList
+    .map((repo, cI) => {
+      const x = labelW + cI * rowH + cell / 2;
+      const y = reviewers.length * rowH + 14;
+      return `<text x="${fmt(x)}" y="${y}" class="svg-tick" text-anchor="end" transform="rotate(-40 ${fmt(x)} ${y})">${escapeHtml(short(repo))}</text>`;
     })
     .join("");
 
-  const chart = `<svg class="chart chart-fixed" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Reviewer activity heatmap" preserveAspectRatio="xMinYMin meet">${rows}${ticks}</svg>`;
-  return `<div class="scroll-x scroll-latest">${chart}</div>`;
+  const chart = `<svg class="chart chart-fixed" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Reviewer by repository heatmap" preserveAspectRatio="xMinYMin meet">${rows}${ticks}</svg>`;
+  return `<div class="scroll-x">${chart}</div>`;
+}
+
+/**
+ * Sankey: difficulty band (left) → reviewer (right). Ribbon thickness ∝ the
+ * number of PRs of that band assigned to that reviewer; node height ∝ total.
+ * Counts sit on every node so it reads as numbers, not just proportions.
+ */
+function renderSankey(metrics: DashboardMetrics): string {
+  const reviewers = Object.entries(metrics.reviewsPerPerson)
+    .sort(([la, ca], [lb, cb]) => (cb !== ca ? cb - ca : la.localeCompare(lb)))
+    .map(([login]) => login);
+  const activeBands = BANDS.filter((b) => metrics.bandDistribution[b] > 0);
+  const total = reviewers.reduce((s, l) => s + (metrics.reviewsPerPerson[l] ?? 0), 0);
+  if (total === 0 || reviewers.length === 0) {
+    return `<section><h2>Assignment flow</h2><p class="empty">No assignments yet.</p></section>`;
+  }
+
+  const W = 640;
+  const nodeW = 14;
+  const gap = 6;
+  const leftLabelW = 104;
+  const rightLabelW = 128;
+  const leftX = leftLabelW;
+  const rightX = W - rightLabelW - nodeW;
+
+  const maxGaps = Math.max(activeBands.length - 1, reviewers.length - 1) * gap;
+  const plotH = Math.max(200, reviewers.length * 30);
+  const unit = (plotH - maxGaps) / total;
+
+  // Left band nodes (BAND order, top→bottom) and their outgoing-link cursor.
+  const bandTop = new Map<DifficultyBand, number>();
+  const bandCursor = new Map<DifficultyBand, number>();
+  let ly = 0;
+  for (const b of activeBands) {
+    bandTop.set(b, ly);
+    bandCursor.set(b, ly);
+    ly += metrics.bandDistribution[b] * unit + gap;
+  }
+  // Right reviewer nodes (volume desc) and their incoming-link cursor.
+  const revTop = new Map<string, number>();
+  const revCursor = new Map<string, number>();
+  let ry = 0;
+  for (const login of reviewers) {
+    revTop.set(login, ry);
+    revCursor.set(login, ry);
+    ry += (metrics.reviewsPerPerson[login] ?? 0) * unit + gap;
+  }
+  const H = Math.max(ly, ry) - gap;
+
+  // Links: outer loop = band keeps right-side stacking in band order.
+  const links: string[] = [];
+  for (const b of activeBands) {
+    for (const login of reviewers) {
+      const c = metrics.bandByPerson[login]?.[b] ?? 0;
+      if (c <= 0) continue;
+      const t = c * unit;
+      const y1 = (bandCursor.get(b) ?? 0) + t / 2;
+      bandCursor.set(b, (bandCursor.get(b) ?? 0) + t);
+      const y2 = (revCursor.get(login) ?? 0) + t / 2;
+      revCursor.set(login, (revCursor.get(login) ?? 0) + t);
+      const x1 = leftX + nodeW;
+      const mx = (x1 + rightX) / 2;
+      const d = `M${fmt(x1)} ${fmt(y1)} C${fmt(mx)} ${fmt(y1)} ${fmt(mx)} ${fmt(y2)} ${fmt(rightX)} ${fmt(y2)}`;
+      links.push(
+        `<path d="${d}" fill="none" stroke="var(--band-${b})" stroke-width="${fmt(Math.max(1, t))}" stroke-opacity="0.4"><title>${BAND_LABEL[b]} → ${escapeHtml(login)}: ${c}</title></path>`,
+      );
+    }
+  }
+
+  const leftNodes = activeBands
+    .map((b) => {
+      const y = bandTop.get(b) ?? 0;
+      const h = metrics.bandDistribution[b] * unit;
+      const cy = y + h / 2;
+      return (
+        `<rect x="${leftX}" y="${fmt(y)}" width="${nodeW}" height="${fmt(Math.max(1, h))}" rx="2" fill="var(--band-${b})"><title>${BAND_LABEL[b]}: ${metrics.bandDistribution[b]}</title></rect>` +
+        `<text x="${leftX - 8}" y="${fmt(cy)}" class="svg-label" text-anchor="end" dominant-baseline="central">${BAND_LABEL[b]} <tspan class="svg-count">${metrics.bandDistribution[b]}</tspan></text>`
+      );
+    })
+    .join("");
+
+  const rightNodes = reviewers
+    .map((login) => {
+      const y = revTop.get(login) ?? 0;
+      const h = (metrics.reviewsPerPerson[login] ?? 0) * unit;
+      const cy = y + h / 2;
+      return (
+        `<rect x="${rightX}" y="${fmt(y)}" width="${nodeW}" height="${fmt(Math.max(1, h))}" rx="2" fill="var(--accent)"><title>${escapeHtml(login)}: ${metrics.reviewsPerPerson[login]}</title></rect>` +
+        `<text x="${rightX + nodeW + 8}" y="${fmt(cy)}" class="svg-label" dominant-baseline="central">${escapeHtml(login)} <tspan class="svg-count">${metrics.reviewsPerPerson[login]}</tspan></text>`
+      );
+    })
+    .join("");
+
+  const chart = svg(
+    W,
+    H,
+    links.join("") + leftNodes + rightNodes,
+    "Assignment flow from difficulty band to reviewer",
+  );
+  return `<section>
+      <h2>Assignment flow</h2>
+      <p class="section-hint">Difficulty band → reviewer. Ribbon thickness = PRs of that band assigned to that reviewer.</p>
+      ${chart}
+    </section>`;
+}
+
+/**
+ * Flame/icicle chart of the workload: All → reviewer → difficulty band. Each
+ * layer sums to the same total; cell width ∝ share of review volume. Reviewer
+ * cells are tinted by their heaviest band; counts sit on every cell wide enough.
+ */
+function renderFlame(metrics: DashboardMetrics): string {
+  const reviewers = Object.entries(metrics.reviewsPerPerson).sort(
+    ([la, ca], [lb, cb]) => (cb !== ca ? cb - ca : la.localeCompare(lb)),
+  );
+  const total = reviewers.reduce((s, [, c]) => s + c, 0);
+  if (total === 0) {
+    return `<section><h2>Workload breakdown</h2><p class="empty">No assignments yet.</p></section>`;
+  }
+
+  const W = 920;
+  const rowH = 38;
+  const vgap = 3;
+  const H = rowH * 3 + vgap * 2;
+  const scale = W / total;
+
+  const cell = (
+    x: number,
+    y: number,
+    w: number,
+    fill: string,
+    label: string,
+    count: number,
+  ): string => {
+    const text =
+      w > 46
+        ? `<text x="${fmt(x + 6)}" y="${fmt(y + rowH / 2)}" class="flame-label" dominant-baseline="central">${escapeHtml(label)} ${count}</text>`
+        : "";
+    return `<rect x="${fmt(x)}" y="${y}" width="${fmt(Math.max(1, w - 1))}" height="${rowH}" rx="3" fill="${fill}"><title>${escapeHtml(label)}: ${count}</title></rect>${text}`;
+  };
+
+  const y1 = rowH + vgap;
+  const y2 = (rowH + vgap) * 2;
+  let body = cell(0, 0, W, "var(--accent)", "All assignments", total);
+
+  let x = 0;
+  for (const [login, cnt] of reviewers) {
+    const w = cnt * scale;
+    const byBand = metrics.bandByPerson[login] ?? { simple: 0, moderate: 0, hard: 0 };
+    const dom = BANDS.reduce((best, b) => (byBand[b] > byBand[best] ? b : best), BANDS[0]);
+    body += cell(x, y1, w, `var(--band-${dom})`, login, cnt);
+    let bx = x;
+    for (const b of BANDS) {
+      const bc = byBand[b];
+      if (bc <= 0) continue;
+      body += cell(bx, y2, bc * scale, `var(--band-${b})`, BAND_LABEL[b], bc);
+      bx += bc * scale;
+    }
+    x += w;
+  }
+
+  const chart = `<svg class="chart chart-fixed" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Workload breakdown flame graph" preserveAspectRatio="xMinYMin meet">${body}</svg>`;
+  return `<section>
+      <h2>Workload breakdown</h2>
+      <p class="section-hint">Flame graph: all assignments → reviewer → difficulty band. Width = share of total review volume.</p>
+      <div class="scroll-x">${chart}</div>
+    </section>`;
 }
 
 /** Full reviewer roster (log-derived) with per-band counts — the list, not just
@@ -483,6 +741,12 @@ function renderOpenPrsSection(snapshot: DashboardInput["openPrs"]): string {
   if (prs.length === 0) {
     return `<section><h2>Open PRs</h2><p class="empty">No open PRs in the latest snapshot.</p></section>`;
   }
+  const bandRank: Record<DifficultyBand, number> = { simple: 0, moderate: 1, hard: 2 };
+  const stalenessRank: Record<OpenPrSnapshot["staleness"], number> = {
+    normal: 0,
+    warning: 1,
+    overdue: 2,
+  };
   const sorted = [...prs].sort((a, b) => (b.ageDays ?? -1) - (a.ageDays ?? -1));
   const body = sorted
     .map((pr) => {
@@ -491,25 +755,27 @@ function renderOpenPrsSection(snapshot: DashboardInput["openPrs"]): string {
       const band = pr.band
         ? `<span class="badge" style="background: var(--band-${pr.band})">${BAND_LABEL[pr.band]}</span>`
         : "—";
+      const bandVal = pr.band ? bandRank[pr.band] : -1;
       const assignees = escapeHtml(pr.assignees.join(", ") || "—");
       return `
         <tr>
           <td class="login">${escapeHtml(pr.repo)}#${pr.pr}</td>
           <td>${escapeHtml(pr.title)}</td>
-          <td>${band}</td>
+          <td data-val="${bandVal}">${band}</td>
           <td>${assignees}</td>
-          <td class="count">${age}</td>
-          <td><span class="badge" style="background: ${badge.color}">${badge.label}</span></td>
+          <td class="count" data-val="${pr.ageDays ?? -1}">${age}</td>
+          <td data-val="${stalenessRank[pr.staleness]}"><span class="badge" style="background: ${badge.color}">${badge.label}</span></td>
         </tr>`;
     })
     .join("");
   const takenAt = snapshot?.takenAt ? escapeHtml(snapshot.takenAt.slice(0, 10)) : "";
   return `<section>
       <h2>Open PRs</h2>
-      <p class="section-hint">Point-in-time snapshot${takenAt ? ` from ${takenAt}` : ""} — oldest first.</p>
-      <table>
+      <p class="section-hint">Point-in-time snapshot${takenAt ? ` from ${takenAt}` : ""} — click a column to sort; search filters rows.</p>
+      <input type="search" class="table-search" data-target="open-prs-table" placeholder="Search open PRs…" aria-label="Search open PRs">
+      <table id="open-prs-table" class="sortable">
         <thead>
-          <tr><th>PR</th><th>Title</th><th>Difficulty</th><th>Assignees</th><th>Age</th><th>Status</th></tr>
+          <tr><th data-sort="text">PR</th><th data-sort="text">Title</th><th data-sort="num">Difficulty</th><th data-sort="text">Assignees</th><th data-sort="num">Age</th><th data-sort="num">Status</th></tr>
         </thead>
         <tbody>${body}</tbody>
       </table>
@@ -699,6 +965,28 @@ const STYLES = `
     .svg-label { fill: var(--text); font-size: 12px; }
     .svg-count { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     .svg-tick { fill: var(--muted); font-size: 10px; }
+    .flame-label { fill: #fff; font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none; }
+    .heat-num { font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; }
+
+    .tabs { display: flex; gap: 0.25rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+    .tab {
+      appearance: none; border: none; background: none; color: var(--muted);
+      font: inherit; font-size: 0.9rem; font-weight: 600;
+      padding: 0.55rem 0.9rem; cursor: pointer;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    .tab-panel.hidden { display: none; }
+
+    .table-search {
+      width: 100%; max-width: 320px; margin: 0 0 0.85rem;
+      padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface); color: var(--text); font: inherit; font-size: 0.85rem;
+    }
+    table.sortable th { user-select: none; }
+    table.sortable th[data-dir="asc"]::after { content: " ▲"; color: var(--muted); font-size: 0.7em; }
+    table.sortable th[data-dir="desc"]::after { content: " ▼"; color: var(--muted); font-size: 0.7em; }
     .donut-total { fill: var(--text); font-size: 28px; font-weight: 680; }
     .donut-sub { fill: var(--muted); font-size: 12px; }
 

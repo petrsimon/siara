@@ -300,9 +300,35 @@ describe("generateDashboard", () => {
       ],
       generatedAtIso,
     });
-    expect(html).toContain("Activity heatmap");
+    expect(html).toContain("Reviewer × repo");
     expect(html).toContain("scroll-latest");
     expect(html).toContain("scrollLeft");
+  });
+
+  it("splits Open PRs into its own tab", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],
+      openPrs: {
+        takenAt: "2026-08-25T09:00:00.000Z",
+        prs: [
+          {
+            repo: "org/repo",
+            pr: 1,
+            title: "x",
+            author: "a",
+            assignees: ["alice"],
+            ageDays: 1,
+            band: "simple",
+            staleness: "normal",
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+    expect(html).toContain('class="tabs"');
+    expect(html).toContain('data-tab="open-prs"');
+    expect(html).toContain('id="tab-open-prs"');
+    expect(html).toContain('id="tab-overview"');
   });
 
   it("renders a reviewer roster list with per-band counts", () => {
@@ -318,6 +344,24 @@ describe("generateDashboard", () => {
     expect(html).toContain("<th>Total</th>");
     expect(html).toContain("alice");
     expect(html).toContain("bob");
+  });
+
+  it("renders the Sankey flow and flame-graph workload breakdown with counts", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
+        assignment({ assignees: ["alice"], band: "simple", pr: 2 }),
+        assignment({ assignees: ["bob"], band: "moderate", pr: 3 }),
+      ],
+      generatedAtIso,
+    });
+    // Sankey: band → reviewer flow with node counts.
+    expect(html).toContain("Assignment flow");
+    expect(html).toContain("Ribbon thickness");
+    // Flame graph: All → reviewer → band, with the total on the root cell.
+    expect(html).toContain("Workload breakdown");
+    expect(html).toContain("All assignments 3");
+    expect(html).toContain("flame-label");
   });
 
   it("renders the open-PRs age overview and per-reviewer waiting stats", () => {
@@ -346,6 +390,13 @@ describe("generateDashboard", () => {
     expect(html).toContain("overdue");
     expect(html).toContain("Waiting on reviewers");
     expect(html).toContain("Oldest");
+    // Open-PRs table is sortable and searchable.
+    expect(html).toContain('id="open-prs-table"');
+    expect(html).toContain('class="sortable"');
+    expect(html).toContain('class="table-search"');
+    expect(html).toContain("localeCompare"); // client-side sort wiring
+    // Difficulty/Age/Status carry numeric sort values.
+    expect(html).toContain('data-val="2"'); // hard band rank / overdue rank
   });
 
   it("shows empty states for open-PRs sections without a snapshot", () => {
