@@ -57,6 +57,8 @@ export interface CandidateHistory {
   reviewsByPath?: Record<string, number>;
   /** Current count of open review assignments (load signal). */
   openReviewLoad: number;
+  /** Jira/manual "heads-down" weight — how busy this person is on their own work. */
+  jiraBusy: number;
   /**
    * Recently-reviewed PRs by this candidate, for follow-up affinity.
    * Only those within the affinity window need be included.
@@ -161,6 +163,8 @@ export interface ScoredCandidate {
     filesAtRisk: number;
     softEstimate: number;
     softPriority: number;
+    /** Availability penalty (manager/busy/load), <= 0, subtracted from score. */
+    availability: number;
   };
   openReviewLoad: number;
   /** Per-candidate rationale fragments accumulated during scoring. */
@@ -180,4 +184,49 @@ export interface Assignment {
   rationale: string;
   /** Ranked candidate list "login:score", best first. */
   candidates: string[];
+}
+
+/**
+ * A point-in-time record of one open PR, emitted by `daily` into a git-tracked
+ * snapshot each run. Powers the dashboard's PR-age overview and per-reviewer
+ * waiting stats without needing config or the SQLite store at dashboard time.
+ */
+export interface OpenPrSnapshot {
+  repo: string;
+  pr: number;
+  title: string;
+  author: string;
+  /** Reviewers currently requested (or freshly assigned this run). */
+  assignees: string[];
+  /** Age in days since the PR was posted to the Slack workflow, if known. */
+  ageDays?: number;
+  /** Difficulty band, when the PR was scored this run. */
+  band?: DifficultyBand;
+  /** "normal" | "warning" | "overdue" from the staleness thresholds. */
+  staleness: "normal" | "warning" | "overdue";
+  /** ISO timestamp the PR was posted (drives age), if known. */
+  postedAt?: string;
+}
+
+/** A full open-PRs snapshot: point-in-time, overwritten each `daily` run. */
+export interface OpenPrsSnapshot {
+  /** ISO timestamp the snapshot was taken. */
+  takenAt: string;
+  prs: OpenPrSnapshot[];
+}
+
+/**
+ * A manual reviewer change observed after Siara's auto-assignment: the PR's
+ * live requested reviewers no longer match what Siara suggested. Logged (never
+ * reverted) so the dashboard can report suggestion-acceptance over time.
+ */
+export interface Override {
+  /** ISO timestamp when the divergence was first observed. */
+  seenAt: string;
+  repo: string;
+  pr: number;
+  /** Reviewers Siara originally suggested (sorted). */
+  suggested: string[];
+  /** Reviewers actually requested on the PR now (sorted). */
+  actual: string[];
 }

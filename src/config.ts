@@ -21,6 +21,34 @@ export interface PathRiskRule {
   label?: string;
 }
 
+/**
+ * Editable per-reviewer properties (managed via the local admin page). These are
+ * the operator-tunable knobs the availability penalty reads: a manual busyness
+ * coefficient and a time-boxed "unavailable" flag (PTO / don't-assign).
+ */
+export interface ReviewerProps {
+  /**
+   * Manual "heads-down" busyness coefficient (same units as the legacy
+   * `reviewerBusy` map). Feeds the availability penalty via sync. Overrides the
+   * legacy map entry when both are present.
+   */
+  busy?: number;
+  /**
+   * PTO / don't-assign this reviewer. Applied as a STRONG SOFT penalty: they
+   * fall to the bottom but stay assignable if they're the sole viable reviewer
+   * (capped by `availability.maxPenaltyFraction`, like the manager penalty).
+   */
+  unavailable?: boolean;
+  /**
+   * Optional ISO date ("YYYY-MM-DD"). When set, `unavailable` auto-expires the
+   * day AFTER this date — resolved live against `nowIso` at assign time, so PTO
+   * clears itself without an admin edit.
+   */
+  until?: string;
+  /** Free-text note surfaced in the admin page (e.g. "back Mon", "on-call"). */
+  note?: string;
+}
+
 export interface SiaraTeamConfig {
   /** GitHub logins on the team. */
   roster: string[];
@@ -79,6 +107,55 @@ export interface SiaraTeamConfig {
     priorityExpertBoost: number;
     highPriorityLoadPenalty: number;
   };
+  /**
+   * Roster logins who are managers (or otherwise shouldn't carry hard reviews).
+   * They get a soft availability penalty on moderate/hard PRs only — never
+   * simple — so those route elsewhere when a capable reviewer exists, but a
+   * manager who is the *sole* expert is still assignable. Not an exclusion.
+   */
+  managers: string[];
+  /**
+   * Manual "how heads-down is this person" weight per login (e.g. deep in a
+   * high-priority/hard Jira ticket). Feeds the availability penalty now; the
+   * real Jira adapter can add to it later via getReviewerWorkload. Default {}.
+   */
+  reviewerBusy: Record<string, number>;
+  /**
+   * Editable per-reviewer properties (busy coefficient + PTO/don't-assign),
+   * managed by the local admin page. Authoritative over the legacy
+   * `reviewerBusy` map. Keys must be roster logins. Default {}.
+   */
+  reviewers: Record<string, ReviewerProps>;
+  /**
+   * Availability penalty tuning. A candidate's score is reduced before the final
+   * sort by bandWeight[band] × (loadWeight·openLoad + busyWeight·jiraBusy +
+   * managerPenalty). Soft, deterministic, never a hard filter.
+   */
+  availability: {
+    /** Per open review already assigned. */
+    loadWeight: number;
+    /** Per unit of jira/manual busy weight. */
+    busyWeight: number;
+    /** Manager penalty on moderate PRs. */
+    managerModeratePenalty: number;
+    /** Manager penalty on hard PRs. */
+    managerHardPenalty: number;
+    /**
+     * Flat penalty for an `unavailable` (PTO/don't-assign) reviewer. NOT
+     * band-scaled — PTO bites on every band. Large by default so the cap
+     * saturates and they sink to the bottom, yet stay assignable if sole viable.
+     */
+    unavailablePenalty: number;
+    /** How much availability matters per band (simple ≈ education, ignore busy). */
+    bandWeight: { simple: number; moderate: number; hard: number };
+    /**
+     * Ceiling on the penalty as a fraction of the candidate's primary score, so
+     * availability stays SOFT: a strong expert always keeps at least
+     * (1 - maxPenaltyFraction) of their score and can never be flipped below a
+     * zero-knowledge peer. Prevents the penalty from becoming a de-facto filter.
+     */
+    maxPenaltyFraction: number;
+  };
   staleness: {
     warningDays: number;
     overdueDays: number;
@@ -99,6 +176,42 @@ export interface SiaraTeamConfig {
    * split the PR or accept the cost knowingly. No silent truncation.
    */
   giantPrFileThreshold: number;
+  /**
+   * Jira Cloud integration (redhat.atlassian.net). Optional — when absent, the
+   * noop Jira adapter is used and reviewer busyness comes only from the manual
+   * `reviewerBusy` map. Credentials (email + API token) are NOT stored here;
+   * they come from the JIRA_USER / JIRA_ACCESS_TOKEN environment at the CLI.
+   */
+  jira?: {
+    /** Base URL, e.g. "https://redhat.atlassian.net". */
+    baseUrl: string;
+    /** Custom field id holding story points, e.g. "customfield_10016". */
+    storyPointsFieldId?: string;
+    /** Custom field id holding the epic link (classic projects). Next-gen uses
+     *  the parent link, read automatically. */
+    epicFieldId?: string;
+    /** Maps a roster GitHub login → Jira accountId, so reviewer workload can be
+     *  queried per person. Logins without a mapping contribute no Jira busyness
+     *  (they fall back to the manual `reviewerBusy` map). */
+    accountMap?: Record<string, string>;
+    workload?: {
+      /** statusCategory that counts as "heads-down", default "In Progress". */
+      statusCategory?: string;
+      /** Per-priority-name weight; unlisted priorities contribute their points
+       *  (or 1) with weight 1. */
+      priorityWeights?: Record<string, number>;
+    };
+  };
+  /**
+   * Slack integration. Optional — when absent (or SLACK_TOKEN unset), daily runs
+   * skip Slack posts. The bearer token is NOT stored here; it comes from the
+   * SLACK_TOKEN environment. Per Red Hat policy, dev/test must target the sandbox
+   * workspace, not production.
+   */
+  slack?: {
+    /** Target channel id (e.g. "C0123ABCD") the token can post to. */
+    channel: string;
+  };
 }
 
 /** Per-repo overrides — partial, inherits team defaults. */
@@ -174,6 +287,18 @@ export const DEFAULT_TEAM_CONFIG: Omit<SiaraTeamConfig, "roster"> = {
     estimateExpertBoost: 0.1,
     priorityExpertBoost: 0.1,
     highPriorityLoadPenalty: 0.1,
+  },
+  managers: [],
+  reviewerBusy: {},
+  reviewers: {},
+  availability: {
+    loadWeight: 0.03,
+    busyWeight: 0.15,
+    managerModeratePenalty: 0.25,
+    managerHardPenalty: 0.6,
+    unavailablePenalty: 5,
+    bandWeight: { simple: 0.2, moderate: 0.6, hard: 1.0 },
+    maxPenaltyFraction: 0.9,
   },
   staleness: {
     warningDays: 3,

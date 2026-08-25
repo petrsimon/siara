@@ -57,6 +57,29 @@ function validateNames(teamConfig: SiaraTeamConfig, repoConfigs: SiaraRepoConfig
       throw new Error(`Siara config: invalid repo "${r.repo}" (expected "owner/name")`);
     }
   }
+  // Availability signals must point at real roster members, else a typo silently
+  // penalizes nobody (manager) or an off-roster ghost (busy).
+  const roster = new Set(teamConfig.roster);
+  for (const login of teamConfig.managers) {
+    if (!roster.has(login)) {
+      throw new Error(`Siara config: manager "${login}" is not on the roster`);
+    }
+  }
+  for (const login of Object.keys(teamConfig.reviewerBusy)) {
+    if (!roster.has(login)) {
+      throw new Error(`Siara config: reviewerBusy login "${login}" is not on the roster`);
+    }
+  }
+  for (const login of Object.keys(teamConfig.reviewers)) {
+    if (!roster.has(login)) {
+      throw new Error(`Siara config: reviewers login "${login}" is not on the roster`);
+    }
+  }
+  for (const login of Object.keys(teamConfig.jira?.accountMap ?? {})) {
+    if (!roster.has(login)) {
+      throw new Error(`Siara config: jira.accountMap login "${login}" is not on the roster`);
+    }
+  }
 }
 
 function mergeTeamConfig(
@@ -107,6 +130,23 @@ function mergeTeamConfig(
     soft: {
       ...DEFAULT_TEAM_CONFIG.soft,
       ...partial.soft,
+    },
+    managers: partial.managers ?? DEFAULT_TEAM_CONFIG.managers,
+    reviewerBusy: {
+      ...DEFAULT_TEAM_CONFIG.reviewerBusy,
+      ...partial.reviewerBusy,
+    },
+    reviewers: {
+      ...DEFAULT_TEAM_CONFIG.reviewers,
+      ...partial.reviewers,
+    },
+    availability: {
+      ...DEFAULT_TEAM_CONFIG.availability,
+      ...partial.availability,
+      bandWeight: {
+        ...DEFAULT_TEAM_CONFIG.availability.bandWeight,
+        ...partial.availability?.bandWeight,
+      },
     },
     staleness: {
       ...DEFAULT_TEAM_CONFIG.staleness,

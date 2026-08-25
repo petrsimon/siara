@@ -78,6 +78,18 @@ describe("loadConfig", () => {
     expect(() => loadConfig(path)).toThrow(/team\.roster/);
   });
 
+  it("loads reviewer properties and rejects an off-roster reviewer", () => {
+    const ok = nextConfigPath("reviewers-ok");
+    writeConfig(ok, {
+      team: { roster: ["alice"], reviewers: { alice: { unavailable: true, busy: 2 } } },
+    });
+    expect(loadConfig(ok).teamConfig.reviewers.alice).toEqual({ unavailable: true, busy: 2 });
+
+    const bad = nextConfigPath("reviewers-bad");
+    writeConfig(bad, { team: { roster: ["alice"], reviewers: { ghost: { busy: 1 } } } });
+    expect(() => loadConfig(bad)).toThrow(/reviewers login "ghost" is not on the roster/);
+  });
+
   it("defaults repos to empty array when omitted", () => {
     const path = nextConfigPath("no-repos");
     writeConfig(path, { team: { roster: ["alice"] } });
