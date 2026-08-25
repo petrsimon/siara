@@ -72,6 +72,34 @@ export interface RecentReview {
   reviewedAt: string;
 }
 
+/** A currently-open PR whose reviews should always be rescanned (number + branch). */
+export interface OpenPrRef {
+  number: number;
+  branch: string;
+}
+
+/** Inputs for an incremental review-history fetch. */
+export interface ReviewHistoryQuery {
+  /** Window start (now − syncWindowDays). Reviews older than this are dropped;
+   *  on cold start it also bounds the PR walk. */
+  windowStartIso: string;
+  /** Incremental watermark: only PRs numbered above this are pulled fresh (plus
+   *  the always-rescanned open PRs). undefined ⇒ cold start (full window walk). */
+  sincePrNumber?: number;
+  /** Open PRs to always rescan for new reviews (catches reviews on old-but-active PRs). */
+  openPrs: OpenPrRef[];
+}
+
+/** Result of a review-history fetch — enough for the store to merge, not replace. */
+export interface ReviewHistoryPage {
+  /** login → reviews within the window. */
+  reviews: Record<string, RecentReview[]>;
+  /** PR numbers whose reviews were (re)fetched — the store replaces exactly these. */
+  scannedPrNumbers: number[];
+  /** Highest PR number seen — the next watermark. */
+  maxPrNumber: number;
+}
+
 /** Jira signals for a PR — all soft, never gate the band. */
 export interface JiraData {
   /** Story points / effort estimate, if present. */

@@ -2,7 +2,14 @@
  * SQLite-backed SiaraStore. Caches GitHub/Jira sync signals; assignments live in JSONL.
  */
 import Database from "better-sqlite3";
-import type { Assignment, CandidateHistory, JiraData, PullRequest, RecentReview } from "../types.js";
+import type {
+  Assignment,
+  CandidateHistory,
+  JiraData,
+  PullRequest,
+  RecentReview,
+  ReviewHistoryPage,
+} from "../types.js";
 import { dirOf } from "../util/paths.js";
 import { appendAssignmentFile, readAssignmentsFile } from "./assignmentsLog.js";
 import type { SiaraStore, StoreOptions } from "./index.js";
@@ -30,7 +37,8 @@ export class SqliteStore implements SiaraStore {
       CREATE INDEX IF NOT EXISTS idx_commit_history_repo_login
         ON commit_history (repo, login);
 
-      -- review_history: recent reviews per author on a repo (replaced wholesale per login on sync).
+      -- review_history: recent reviews per author on a repo. Merged incrementally
+      -- by PR (rows for rescanned PRs are replaced), pruned to the sync window.
       CREATE TABLE IF NOT EXISTS review_history (
         repo TEXT NOT NULL,
         login TEXT NOT NULL,
@@ -41,6 +49,15 @@ export class SqliteStore implements SiaraStore {
       );
       CREATE INDEX IF NOT EXISTS idx_review_history_repo_login
         ON review_history (repo, login);
+      CREATE INDEX IF NOT EXISTS idx_review_history_repo_pr
+        ON review_history (repo, pr_number);
+
+      -- review_watermark: highest PR number whose reviews are already ingested,
+      -- so the next sync only pulls PRs above it (plus always-rescanned open PRs).
+      CREATE TABLE IF NOT EXISTS review_watermark (
+        repo TEXT PRIMARY KEY,
+        max_pr_number INTEGER NOT NULL
+      );
 
       -- open_load: current open review assignments per login.
       CREATE TABLE IF NOT EXISTS open_load (
@@ -87,37 +104,58 @@ export class SqliteStore implements SiaraStore {
     tx(repo, commits);
   }
 
-  async upsertReviewHistory(
+  async mergeReviewHistory(
     repo: string,
-    reviews: Record<string, RecentReview[]>,
+    page: ReviewHistoryPage,
+    windowStartIso: string,
   ): Promise<void> {
-    const deleteForLogin = this.db.prepare(
-      `DELETE FROM review_history WHERE repo = ? AND login = ?`,
+    const deleteForPr = this.db.prepare(
+      `DELETE FROM review_history WHERE repo = ? AND pr_number = ?`,
     );
     const insert = this.db.prepare(`
       INSERT INTO review_history (repo, login, pr_number, branch, jira_epic, reviewed_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-
-    const tx = this.db.transaction(
-      (r: string, data: Record<string, RecentReview[]>) => {
-        for (const [login, reviewList] of Object.entries(data)) {
-          deleteForLogin.run(r, login);
-          for (const review of reviewList) {
-            insert.run(
-              r,
-              login,
-              review.prNumber,
-              review.branch,
-              review.jiraEpic ?? null,
-              review.reviewedAt,
-            );
-          }
-        }
-      },
+    const prune = this.db.prepare(
+      `DELETE FROM review_history WHERE repo = ? AND reviewed_at < ?`,
     );
+    const setWatermark = this.db.prepare(`
+      INSERT INTO review_watermark (repo, max_pr_number)
+      VALUES (?, ?)
+      ON CONFLICT (repo) DO UPDATE SET
+        max_pr_number = MAX(max_pr_number, excluded.max_pr_number)
+    `);
 
-    tx(repo, reviews);
+    const tx = this.db.transaction((r: string, p: ReviewHistoryPage) => {
+      // Replace rows for exactly the PRs we rescanned — old PRs untouched.
+      for (const prNumber of p.scannedPrNumbers) {
+        deleteForPr.run(r, prNumber);
+      }
+      for (const [login, reviewList] of Object.entries(p.reviews)) {
+        for (const review of reviewList) {
+          insert.run(
+            r,
+            login,
+            review.prNumber,
+            review.branch,
+            review.jiraEpic ?? null,
+            review.reviewedAt,
+          );
+        }
+      }
+      // Drop anything that has aged out of the window.
+      prune.run(r, windowStartIso);
+      setWatermark.run(r, p.maxPrNumber);
+    });
+
+    tx(repo, page);
+  }
+
+  async getReviewWatermark(repo: string): Promise<number | undefined> {
+    const row = this.db
+      .prepare(`SELECT max_pr_number FROM review_watermark WHERE repo = ?`)
+      .get(repo) as { max_pr_number: number } | undefined;
+    return row?.max_pr_number;
   }
 
   async upsertOpenLoad(loads: Record<string, number>): Promise<void> {

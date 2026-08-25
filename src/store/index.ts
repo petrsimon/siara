@@ -15,7 +15,7 @@ import type {
   CandidateHistory,
   JiraData,
   PullRequest,
-  RecentReview,
+  ReviewHistoryPage,
 } from "../types.js";
 
 export interface SiaraStore extends HistoryStore {
@@ -28,11 +28,16 @@ export interface SiaraStore extends HistoryStore {
     repo: string,
     commits: Record<string, Record<string, number>>,
   ): Promise<void>;
-  /** reviews[login] = recent reviews, within the sync window. */
-  upsertReviewHistory(
+  /** Merge a review-history page: replace rows for exactly the scanned PRs,
+   *  prune reviews older than the window, and advance the PR watermark.
+   *  Never a wholesale replace — old PRs' reviews survive between syncs. */
+  mergeReviewHistory(
     repo: string,
-    reviews: Record<string, RecentReview[]>,
+    page: ReviewHistoryPage,
+    windowStartIso: string,
   ): Promise<void>;
+  /** Highest PR number whose reviews are already ingested, or undefined (cold). */
+  getReviewWatermark(repo: string): Promise<number | undefined>;
   /** Current open review load per login. */
   upsertOpenLoad(loads: Record<string, number>): Promise<void>;
   /** Cache Jira signals for a ticket. */

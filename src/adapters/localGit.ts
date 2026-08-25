@@ -13,7 +13,11 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { GitHubAdapter } from "./index.js";
-import type { PullRequest, RecentReview } from "../types.js";
+import type {
+  PullRequest,
+  ReviewHistoryPage,
+  ReviewHistoryQuery,
+} from "../types.js";
 
 const execFile = promisify(execFileCb);
 
@@ -164,8 +168,8 @@ export class LocalGitGitHubAdapter implements GitHubAdapter {
     return this.base.getPullRequestFiles(repo, prNumber);
   }
 
-  getReviewHistory(repo: string, sinceIso: string): Promise<Record<string, RecentReview[]>> {
-    return this.base.getReviewHistory(repo, sinceIso);
+  getReviewHistory(repo: string, query: ReviewHistoryQuery): Promise<ReviewHistoryPage> {
+    return this.base.getReviewHistory(repo, query);
   }
 
   getOpenReviewLoad(logins: string[]): Promise<Record<string, number>> {

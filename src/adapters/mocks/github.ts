@@ -1,5 +1,10 @@
 import type { GitHubAdapter } from "../index.js";
-import type { PullRequest, RecentReview } from "../../types.js";
+import type {
+  PullRequest,
+  RecentReview,
+  ReviewHistoryPage,
+  ReviewHistoryQuery,
+} from "../../types.js";
 
 export interface GitHubMockFixture {
   /** Open PRs keyed by repo. */
@@ -65,14 +70,28 @@ export class MockGitHubAdapter implements GitHubAdapter {
 
   async getReviewHistory(
     repo: string,
-    _sinceIso: string,
-  ): Promise<Record<string, RecentReview[]>> {
+    query: ReviewHistoryQuery,
+  ): Promise<ReviewHistoryPage> {
     const repoReviews = this.fixture.reviewHistory?.[repo] ?? {};
-    const result: Record<string, RecentReview[]> = {};
-    for (const [login, reviews] of Object.entries(repoReviews)) {
-      result[login] = [...reviews];
+    const reviews: Record<string, RecentReview[]> = {};
+    const scanned = new Set<number>();
+    let maxPrNumber = query.sincePrNumber ?? 0;
+    for (const [login, list] of Object.entries(repoReviews)) {
+      reviews[login] = [...list];
+      for (const review of list) {
+        scanned.add(review.prNumber);
+        if (review.prNumber > maxPrNumber) {
+          maxPrNumber = review.prNumber;
+        }
+      }
     }
-    return result;
+    for (const open of query.openPrs) {
+      scanned.add(open.number);
+      if (open.number > maxPrNumber) {
+        maxPrNumber = open.number;
+      }
+    }
+    return { reviews, scannedPrNumbers: [...scanned], maxPrNumber };
   }
 
   async getOpenReviewLoad(logins: string[]): Promise<Record<string, number>> {

@@ -90,27 +90,36 @@ describe("SqliteStore", () => {
     });
   });
 
-  it("upsertReviewHistory populates repoReviewCount and recentReviews; re-upsert replaces", async () => {
+  it("mergeReviewHistory populates repoReviewCount and recentReviews", async () => {
     const repo = "org/repo";
     const pr = samplePr();
+    const windowStart = "2026-01-01T00:00:00.000Z";
 
-    await store.upsertReviewHistory(repo, {
-      alice: [
-        {
-          prNumber: 10,
-          branch: "feat/auth-login",
-          jiraEpic: "EPIC-1",
-          reviewedAt: "2026-01-01T00:00:00.000Z",
+    await store.mergeReviewHistory(
+      repo,
+      {
+        reviews: {
+          alice: [
+            {
+              prNumber: 10,
+              branch: "feat/auth-login",
+              jiraEpic: "EPIC-1",
+              reviewedAt: "2026-01-01T00:00:00.000Z",
+            },
+            {
+              prNumber: 11,
+              branch: "feat/other",
+              reviewedAt: "2026-01-02T00:00:00.000Z",
+            },
+          ],
         },
-        {
-          prNumber: 11,
-          branch: "feat/other",
-          reviewedAt: "2026-01-02T00:00:00.000Z",
-        },
-      ],
-    });
+        scannedPrNumbers: [10, 11],
+        maxPrNumber: 11,
+      },
+      windowStart,
+    );
 
-    let [alice] = await store.getCandidateHistory(repo, pr, ["alice"]);
+    const [alice] = await store.getCandidateHistory(repo, pr, ["alice"]);
     expect(alice?.repoReviewCount).toBe(2);
     expect(alice?.recentReviews).toEqual([
       {
@@ -125,26 +134,93 @@ describe("SqliteStore", () => {
         reviewedAt: "2026-01-02T00:00:00.000Z",
       },
     ]);
+    expect(await store.getReviewWatermark(repo)).toBe(11);
+  });
 
-    await store.upsertReviewHistory(repo, {
-      alice: [
-        {
-          prNumber: 99,
-          branch: "feat/replacement",
-          reviewedAt: "2026-02-01T00:00:00.000Z",
-        },
-      ],
-    });
+  it("mergeReviewHistory merges by PR: old PRs survive, rescanned PRs are replaced", async () => {
+    const repo = "org/repo";
+    const pr = samplePr();
+    const windowStart = "2026-01-01T00:00:00.000Z";
 
-    [alice] = await store.getCandidateHistory(repo, pr, ["alice"]);
-    expect(alice?.repoReviewCount).toBe(1);
-    expect(alice?.recentReviews).toEqual([
+    // First sync: PRs 10 (alice) and 11 (bob).
+    await store.mergeReviewHistory(
+      repo,
       {
-        prNumber: 99,
-        branch: "feat/replacement",
-        reviewedAt: "2026-02-01T00:00:00.000Z",
+        reviews: {
+          alice: [
+            { prNumber: 10, branch: "feat/a", reviewedAt: "2026-01-01T00:00:00.000Z" },
+          ],
+          bob: [
+            { prNumber: 11, branch: "feat/b", reviewedAt: "2026-01-02T00:00:00.000Z" },
+          ],
+        },
+        scannedPrNumbers: [10, 11],
+        maxPrNumber: 11,
       },
+      windowStart,
+    );
+
+    // Second sync: new PR 12 (alice) + rescan open PR 11 (now also carol).
+    // PR 10 was NOT scanned this round and must survive.
+    await store.mergeReviewHistory(
+      repo,
+      {
+        reviews: {
+          alice: [
+            { prNumber: 12, branch: "feat/c", reviewedAt: "2026-01-05T00:00:00.000Z" },
+          ],
+          bob: [
+            { prNumber: 11, branch: "feat/b", reviewedAt: "2026-01-02T00:00:00.000Z" },
+          ],
+          carol: [
+            { prNumber: 11, branch: "feat/b", reviewedAt: "2026-01-06T00:00:00.000Z" },
+          ],
+        },
+        scannedPrNumbers: [11, 12],
+        maxPrNumber: 12,
+      },
+      windowStart,
+    );
+
+    const [alice, bob, carol] = await store.getCandidateHistory(repo, pr, [
+      "alice",
+      "bob",
+      "carol",
     ]);
+    // alice keeps her untouched PR 10 and gains PR 12.
+    expect(alice?.recentReviews.map((r) => r.prNumber).sort()).toEqual([10, 12]);
+    // bob's PR 11 was rescanned and re-inserted, not duplicated.
+    expect(bob?.recentReviews.map((r) => r.prNumber)).toEqual([11]);
+    // carol's new review on the rescanned PR 11 is captured.
+    expect(carol?.recentReviews.map((r) => r.prNumber)).toEqual([11]);
+    expect(await store.getReviewWatermark(repo)).toBe(12);
+  });
+
+  it("mergeReviewHistory prunes reviews older than the window", async () => {
+    const repo = "org/repo";
+    const pr = samplePr();
+
+    await store.mergeReviewHistory(
+      repo,
+      {
+        reviews: {
+          alice: [
+            { prNumber: 10, branch: "old", reviewedAt: "2025-01-01T00:00:00.000Z" },
+            { prNumber: 11, branch: "new", reviewedAt: "2026-06-01T00:00:00.000Z" },
+          ],
+        },
+        scannedPrNumbers: [10, 11],
+        maxPrNumber: 11,
+      },
+      "2026-01-01T00:00:00.000Z",
+    );
+
+    const [alice] = await store.getCandidateHistory(repo, pr, ["alice"]);
+    expect(alice?.recentReviews.map((r) => r.prNumber)).toEqual([11]);
+  });
+
+  it("getReviewWatermark returns undefined before any merge", async () => {
+    expect(await store.getReviewWatermark("org/repo")).toBeUndefined();
   });
 
   it("upsertOpenLoad is reflected in openReviewLoad; unknown login defaults to 0", async () => {

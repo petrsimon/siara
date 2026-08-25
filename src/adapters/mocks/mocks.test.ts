@@ -28,8 +28,17 @@ describe("MockGitHubAdapter", () => {
     await expect(
       adapter.getCommitHistory("org/repo", ["src/a.ts"], "2026-01-01"),
     ).resolves.toEqual({ "src/a.ts": { alice: 3 } });
-    await expect(adapter.getReviewHistory("org/repo", "2026-01-01")).resolves.toEqual({
-      alice: [{ prNumber: 1, branch: "main", reviewedAt: "2026-01-01" }],
+    await expect(
+      adapter.getReviewHistory("org/repo", {
+        windowStartIso: "2026-01-01",
+        openPrs: [],
+      }),
+    ).resolves.toEqual({
+      reviews: {
+        alice: [{ prNumber: 1, branch: "main", reviewedAt: "2026-01-01" }],
+      },
+      scannedPrNumbers: [1],
+      maxPrNumber: 1,
     });
     await expect(adapter.getOpenReviewLoad(["alice", "bob"])).resolves.toEqual({
       alice: 2,

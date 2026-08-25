@@ -7,7 +7,8 @@ import type {
   CandidateHistory,
   JiraData,
   PullRequest,
-  RecentReview,
+  ReviewHistoryPage,
+  ReviewHistoryQuery,
 } from "../types.js";
 
 export interface GitHubAdapter {
@@ -21,11 +22,12 @@ export interface GitHubAdapter {
     paths: string[],
     sinceIso: string,
   ): Promise<Record<string, Record<string, number>>>;
-  /** Review history: reviews per login on the repo within the window. */
+  /** Review history: incremental fetch bounded by watermark + window.
+   *  Returns a mergeable page (not a full replacement). */
   getReviewHistory(
     repo: string,
-    sinceIso: string,
-  ): Promise<Record<string, RecentReview[]>>;
+    query: ReviewHistoryQuery,
+  ): Promise<ReviewHistoryPage>;
   /** Open review load per login across tracked repos. */
   getOpenReviewLoad(logins: string[]): Promise<Record<string, number>>;
   /** Post the rationale as a PR comment. */

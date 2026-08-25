@@ -7,12 +7,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { GitHubAdapter } from "./index.js";
-import type { FileChange, PullRequest, RecentReview } from "../types.js";
+import type {
+  FileChange,
+  PullRequest,
+  RecentReview,
+  ReviewHistoryPage,
+  ReviewHistoryQuery,
+} from "../types.js";
 
 const execFile = promisify(execFileCb);
 
 const JIRA_KEY_RE = /[A-Z]+-\d+/;
-const REVIEW_HISTORY_PR_CAP = 100;
+/** Hard ceiling on paginated PR pages per sync — backstop against a runaway walk. */
+const REVIEW_HISTORY_PAGE_CAP = 50;
+const REVIEW_HISTORY_PAGE_SIZE = 100;
 
 export interface GhCliOptions {
   /** When true, log write commands instead of executing them. */
@@ -37,6 +45,7 @@ interface GhFileItem {
 interface GhPullItem {
   number: number;
   head?: { ref?: string };
+  created_at?: string;
 }
 
 interface GhReviewItem {
@@ -277,34 +286,96 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
 
   async getReviewHistory(
     repo: string,
-    sinceIso: string,
-  ): Promise<Record<string, RecentReview[]>> {
-    const pullsStdout = await runGh([
-      "api",
-      `repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${REVIEW_HISTORY_PR_CAP}`,
-    ]);
-    const pulls = JSON.parse(pullsStdout) as GhPullItem[];
+    query: ReviewHistoryQuery,
+  ): Promise<ReviewHistoryPage> {
+    const { windowStartIso, sincePrNumber, openPrs } = query;
+    const windowStartMs = Date.parse(windowStartIso);
 
-    if (pulls.length >= REVIEW_HISTORY_PR_CAP) {
-      console.warn(
-        `getReviewHistory: capped PR scan at ${REVIEW_HISTORY_PR_CAP} for ${repo}`,
-      );
+    // Walk newest-first, page by page. Two stop conditions:
+    //  - incremental (sincePrNumber set): stop once we reach a PR we've already
+    //    ingested (number <= watermark) — only genuinely new PRs are pulled.
+    //  - cold start (undefined): stop once PRs fall before the window — bounds
+    //    the initial walk without a fixed PR cap.
+    // Union with openPrs so reviews landing on old-but-active PRs are caught.
+    const walked = new Map<number, GhPullItem>();
+    let maxPrNumber = sincePrNumber ?? 0;
+    let stop = false;
+
+    for (let page = 1; page <= REVIEW_HISTORY_PAGE_CAP && !stop; page += 1) {
+      const pageStdout = await runGh([
+        "api",
+        `repos/${repo}/pulls?state=all&sort=created&direction=desc&per_page=${REVIEW_HISTORY_PAGE_SIZE}&page=${page}`,
+      ]);
+      const pagePulls = JSON.parse(pageStdout) as GhPullItem[];
+      if (pagePulls.length === 0) {
+        break;
+      }
+
+      for (const pull of pagePulls) {
+        if (pull.number > maxPrNumber) {
+          maxPrNumber = pull.number;
+        }
+        if (sincePrNumber !== undefined && pull.number <= sincePrNumber) {
+          stop = true;
+          break;
+        }
+        if (
+          sincePrNumber === undefined &&
+          !Number.isNaN(windowStartMs) &&
+          pull.created_at &&
+          Date.parse(pull.created_at) < windowStartMs
+        ) {
+          stop = true;
+          break;
+        }
+        walked.set(pull.number, pull);
+      }
+
+      if (pagePulls.length < REVIEW_HISTORY_PAGE_SIZE) {
+        break;
+      }
+      if (page === REVIEW_HISTORY_PAGE_CAP) {
+        console.warn(
+          `getReviewHistory: hit page cap (${REVIEW_HISTORY_PAGE_CAP}) for ${repo} — older history skipped this sync`,
+        );
+      }
     }
 
+    // Always rescan open PRs even if below the watermark — a new review can land
+    // on a PR opened long ago. Fetch their head/created only if not already walked.
+    for (const open of openPrs) {
+      if (open.number > maxPrNumber) {
+        maxPrNumber = open.number;
+      }
+      if (!walked.has(open.number)) {
+        walked.set(open.number, {
+          number: open.number,
+          head: { ref: open.branch },
+        });
+      }
+    }
+
+    const scannedPrNumbers = [...walked.keys()];
     const reviewsByPr = new Map<number, GhReviewItem[]>();
-    for (const pull of pulls) {
+    for (const prNumber of scannedPrNumbers) {
       try {
         const reviewsStdout = await runGh([
           "api",
-          `repos/${repo}/pulls/${pull.number}/reviews`,
+          `repos/${repo}/pulls/${prNumber}/reviews`,
         ]);
-        reviewsByPr.set(pull.number, JSON.parse(reviewsStdout) as GhReviewItem[]);
+        reviewsByPr.set(prNumber, JSON.parse(reviewsStdout) as GhReviewItem[]);
       } catch {
         // Skip PRs we cannot read.
       }
     }
 
-    return parseReviewHistory(pulls, reviewsByPr, sinceIso);
+    const reviews = parseReviewHistory(
+      [...walked.values()],
+      reviewsByPr,
+      windowStartIso,
+    );
+
+    return { reviews, scannedPrNumbers, maxPrNumber };
   }
 
   async getOpenReviewLoad(logins: string[]): Promise<Record<string, number>> {

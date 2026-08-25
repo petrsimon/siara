@@ -96,8 +96,19 @@ export async function sync(
       normalizeCommitHistory(commitHistory, paths),
     );
 
-    const reviewHistory = await deps.github.getReviewHistory(repo, sinceIso);
-    await deps.store.upsertReviewHistory(repo, reviewHistory);
+    // Review history is bounded by a PR-number watermark, not the sync clock:
+    // pull only PRs above the last-seen number, always rescan the currently-open
+    // set (a review can land on an old-but-active PR), and prune to the window.
+    // windowStartIso is the full window regardless of cold/incremental — it
+    // bounds the cold walk and the prune, never the incremental fetch.
+    const windowStartIso = subtractDays(nowIso, deps.teamConfig.syncWindowDays);
+    const sincePrNumber = await deps.store.getReviewWatermark(repo);
+    const reviewPage = await deps.github.getReviewHistory(repo, {
+      windowStartIso,
+      sincePrNumber,
+      openPrs: openPrs.map((pr) => ({ number: pr.number, branch: pr.branch })),
+    });
+    await deps.store.mergeReviewHistory(repo, reviewPage, windowStartIso);
 
     const jiraKeys = new Set<string>();
     for (const pr of openPrs) {
