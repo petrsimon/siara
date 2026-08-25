@@ -1,4 +1,4 @@
-import type { DifficultyBand, OpenPrSnapshot } from "../types.js";
+import type { DifficultyBand, OpenPrSnapshot, ReviewResponse } from "../types.js";
 import type { DashboardInput, DashboardMetrics } from "./index.js";
 import { buildMetrics } from "./metrics.js";
 import { escapeHtml } from "./html.js";
@@ -21,6 +21,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const heatmap = renderHeatmap(metrics);
   const openPrs = input.openPrs?.prs ?? [];
   const waitingSection = renderWaitingSection(openPrs);
+  const responseSection = renderResponseSection(input.responseTimes?.responses ?? []);
   const openPrsSection = renderOpenPrsSection(input.openPrs);
   const overridesSection = renderOverridesSection(input, overrides);
 
@@ -112,6 +113,8 @@ ${STYLES}
     ${openPrsSection}
 
     ${waitingSection}
+
+    ${responseSection}
 
     ${overridesSection}
 
@@ -391,6 +394,77 @@ function renderWaitingSection(openPrs: OpenPrSnapshot[]): string {
       <table>
         <thead>
           <tr><th>Reviewer</th><th>Open PRs</th><th>Avg age</th><th>Oldest</th></tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+    </section>`;
+}
+
+/** Median of a non-empty numeric list. */
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? ((s[mid - 1] ?? 0) + (s[mid] ?? 0)) / 2 : (s[mid] ?? 0);
+}
+
+/**
+ * Per-reviewer responsiveness: time from assignment to first review, plus how
+ * many assignments are still outstanding (open, no review yet) and the oldest.
+ * Outstanding reviewers sort first — they're the ones holding PRs up now.
+ */
+function renderResponseSection(responses: ReviewResponse[]): string {
+  if (responses.length === 0) {
+    return `<section><h2>Response time</h2><p class="empty">No review-latency data yet.</p></section>`;
+  }
+  const byReviewer = new Map<
+    string,
+    { latencies: number[]; waits: number[] }
+  >();
+  for (const r of responses) {
+    const agg = byReviewer.get(r.reviewer) ?? { latencies: [], waits: [] };
+    if (!r.outstanding && r.latencyHours !== undefined) {
+      agg.latencies.push(r.latencyHours);
+    } else if (r.outstanding && r.waitingHours !== undefined) {
+      agg.waits.push(r.waitingHours);
+    }
+    byReviewer.set(r.reviewer, agg);
+  }
+
+  const days = (hours: number): string => `${(hours / 24).toFixed(1)}d`;
+  const rows = [...byReviewer.entries()]
+    .map(([login, { latencies, waits }]) => ({
+      login,
+      reviewed: latencies.length,
+      medianH: latencies.length > 0 ? median(latencies) : undefined,
+      slowestH: latencies.length > 0 ? Math.max(...latencies) : undefined,
+      outstanding: waits.length,
+      oldestWaitH: waits.length > 0 ? Math.max(...waits) : undefined,
+    }))
+    .sort((a, b) =>
+      b.outstanding !== a.outstanding
+        ? b.outstanding - a.outstanding
+        : (b.oldestWaitH ?? b.medianH ?? 0) - (a.oldestWaitH ?? a.medianH ?? 0),
+    );
+
+  const body = rows
+    .map(
+      (r) => `
+        <tr>
+          <td class="login">${escapeHtml(r.login)}</td>
+          <td class="count">${r.reviewed}</td>
+          <td class="count">${r.medianH === undefined ? "—" : days(r.medianH)}</td>
+          <td class="count">${r.slowestH === undefined ? "—" : days(r.slowestH)}</td>
+          <td class="count">${r.outstanding || "—"}</td>
+          <td class="count">${r.oldestWaitH === undefined ? "—" : days(r.oldestWaitH)}</td>
+        </tr>`,
+    )
+    .join("");
+  return `<section>
+      <h2>Response time</h2>
+      <p class="section-hint">Time from assignment to a reviewer's first review. Outstanding = assigned on a still-open PR with no review yet (sorted to the top).</p>
+      <table>
+        <thead>
+          <tr><th>Reviewer</th><th>Reviewed</th><th>Median</th><th>Slowest</th><th>Outstanding</th><th>Oldest waiting</th></tr>
         </thead>
         <tbody>${body}</tbody>
       </table>

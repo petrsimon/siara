@@ -354,6 +354,44 @@ describe("generateDashboard", () => {
       generatedAtIso,
     });
     expect(html).toContain("No open PRs in the latest snapshot.");
+    expect(html).toContain("No review-latency data yet.");
+  });
+
+  it("renders per-reviewer response-time stats", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["bob"], band: "hard", pr: 7 })],
+      responseTimes: {
+        takenAt: "2026-08-25T10:00:00.000Z",
+        responses: [
+          {
+            repo: "org/repo",
+            pr: 7,
+            reviewer: "bob",
+            assignedAt: "2026-08-20T00:00:00.000Z",
+            firstReviewAt: "2026-08-22T00:00:00.000Z",
+            latencyHours: 48,
+            outstanding: false,
+          },
+          {
+            repo: "org/repo",
+            pr: 8,
+            reviewer: "carol",
+            assignedAt: "2026-08-20T00:00:00.000Z",
+            outstanding: true,
+            waitingHours: 120,
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+    expect(html).toContain("Response time");
+    expect(html).toContain("Outstanding");
+    // bob's 48h latency → 2.0d; carol's 120h wait → 5.0d.
+    expect(html).toContain("2.0d");
+    expect(html).toContain("5.0d");
+    // Within the response section, carol is outstanding → sorted above bob.
+    const section = html.slice(html.indexOf("Response time"));
+    expect(section.indexOf("carol")).toBeLessThan(section.indexOf(">bob<"));
   });
 
   it("shows PR difficulty metadata in the manual-override row", () => {

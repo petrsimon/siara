@@ -12,6 +12,8 @@ import { file, pullRequest, simpleFiles } from "../scoring/fixtures.js";
 import { openStore, type SqliteStore } from "../store/sqliteStore.js";
 import { overridesPathFor } from "../store/overridesLog.js";
 import { snapshotPathFor } from "../store/snapshotLog.js";
+import { responsePathFor } from "../store/responseLog.js";
+import { hoursBetween } from "./dates.js";
 import { daily } from "./daily.js";
 import { dryRun } from "./dryRun.js";
 import { formatRepostLine } from "./staleness.js";
@@ -208,7 +210,11 @@ describe("daily live", () => {
 
   afterEach(async () => {
     await store.close();
-    for (const p of [assignmentsPath, snapshotPathFor(assignmentsPath)]) {
+    for (const p of [
+      assignmentsPath,
+      snapshotPathFor(assignmentsPath),
+      responsePathFor(assignmentsPath),
+    ]) {
       if (existsSync(p)) unlinkSync(p);
     }
   });
@@ -274,6 +280,46 @@ describe("daily live", () => {
 
     await dryRun(deps, NOW);
     expect(await store.readOpenPrsSnapshot()).toBeUndefined();
+    expect(await store.readResponseReport()).toBeUndefined();
+  });
+
+  it("writes a review-latency report with reviewed and outstanding entries", async () => {
+    // Two assignments five days ago: alice on #50 (later reviewed), bob on #51.
+    const past = "2026-08-20";
+    const base = { repo: REPO, difficulty: 0.5, band: "moderate" as const, rationale: "x", candidates: [] };
+    await store.appendAssignment({ ...base, date: past, pr: 50, assignees: ["alice"] });
+    await store.appendAssignment({ ...base, date: past, pr: 51, assignees: ["bob"] });
+
+    // #51 stays open (pending bob, no review) → outstanding; #50 is closed but
+    // alice reviewed it two days after assignment → measured latency.
+    const pending = pullRequest({
+      number: 51,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: ["bob"],
+    });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pending] },
+      reviewHistory: {
+        [REPO]: { alice: [{ prNumber: 50, branch: "b", reviewedAt: "2026-08-22T10:00:00.000Z" }] },
+      },
+    });
+    const deps = makeDeps(github, store);
+
+    await daily(deps, NOW);
+
+    const report = await store.readResponseReport();
+    const alice = report?.responses.find((r) => r.reviewer === "alice");
+    const bob = report?.responses.find((r) => r.reviewer === "bob");
+
+    expect(alice?.outstanding).toBe(false);
+    expect(alice?.firstReviewAt).toBe("2026-08-22T10:00:00.000Z");
+    expect(alice?.latencyHours).toBe(
+      hoursBetween("2026-08-20T00:00:00.000Z", "2026-08-22T10:00:00.000Z"),
+    );
+
+    expect(bob?.outstanding).toBe(true);
+    expect(bob?.waitingHours).toBe(hoursBetween("2026-08-20T00:00:00.000Z", NOW));
   });
 });
 

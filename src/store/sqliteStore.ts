@@ -10,6 +10,7 @@ import type {
   Override,
   PullRequest,
   RecentReview,
+  ResponseTimeReport,
   ReviewHistoryPage,
 } from "../types.js";
 import { dirOf } from "../util/paths.js";
@@ -24,7 +25,12 @@ import {
   snapshotPathFor,
   writeOpenPrsSnapshot,
 } from "./snapshotLog.js";
-import type { SiaraStore, StoreOptions } from "./index.js";
+import {
+  readResponseReport,
+  responsePathFor,
+  writeResponseReport,
+} from "./responseLog.js";
+import type { ReviewEvent, SiaraStore, StoreOptions } from "./index.js";
 
 /** Cached signals + sync bookkeeping. Assignments are stored separately in JSONL. */
 export class SqliteStore implements SiaraStore {
@@ -32,6 +38,7 @@ export class SqliteStore implements SiaraStore {
   private readonly assignmentsPath: string;
   private readonly overridesPath: string;
   private readonly snapshotPath: string;
+  private readonly responsePath: string;
 
   constructor(opts: StoreOptions) {
     this.db = new Database(opts.dbPath);
@@ -39,6 +46,7 @@ export class SqliteStore implements SiaraStore {
     this.overridesPath =
       opts.overridesPath ?? overridesPathFor(opts.assignmentsPath);
     this.snapshotPath = snapshotPathFor(opts.assignmentsPath);
+    this.responsePath = responsePathFor(opts.assignmentsPath);
   }
 
   async init(): Promise<void> {
@@ -371,6 +379,35 @@ export class SqliteStore implements SiaraStore {
 
   async readOpenPrsSnapshot(): Promise<OpenPrsSnapshot | undefined> {
     return readOpenPrsSnapshot(this.snapshotPath);
+  }
+
+  async getReviewEvents(repo: string, prNumbers: number[]): Promise<ReviewEvent[]> {
+    if (prNumbers.length === 0) return [];
+    const placeholders = prNumbers.map(() => "?").join(", ");
+    const rows = this.db
+      .prepare(
+        `SELECT pr_number, login, reviewed_at
+         FROM review_history
+         WHERE repo = ? AND pr_number IN (${placeholders})`,
+      )
+      .all(repo, ...prNumbers) as Array<{
+      pr_number: number;
+      login: string;
+      reviewed_at: string;
+    }>;
+    return rows.map((r) => ({
+      pr: r.pr_number,
+      login: r.login,
+      reviewedAt: r.reviewed_at,
+    }));
+  }
+
+  async writeResponseReport(report: ResponseTimeReport): Promise<void> {
+    writeResponseReport(this.responsePath, report);
+  }
+
+  async readResponseReport(): Promise<ResponseTimeReport | undefined> {
+    return readResponseReport(this.responsePath);
   }
 
   async close(): Promise<void> {

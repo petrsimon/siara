@@ -17,8 +17,16 @@ import type {
   OpenPrsSnapshot,
   Override,
   PullRequest,
+  ResponseTimeReport,
   ReviewHistoryPage,
 } from "../types.js";
+
+/** One ingested review event: who reviewed which PR, and when. */
+export interface ReviewEvent {
+  pr: number;
+  login: string;
+  reviewedAt: string;
+}
 
 export interface SiaraStore extends HistoryStore {
   /** Create tables / indexes if absent. Idempotent. */
@@ -72,6 +80,15 @@ export interface SiaraStore extends HistoryStore {
   /** Overwrite the point-in-time open-PRs snapshot. */
   writeOpenPrsSnapshot(snapshot: OpenPrsSnapshot): Promise<void>;
   readOpenPrsSnapshot(): Promise<OpenPrsSnapshot | undefined>;
+
+  // --- review events (read side, for latency computation) --------------------
+  /** All ingested review events for the given PRs in a repo (pr, login, when). */
+  getReviewEvents(repo: string, prNumbers: number[]): Promise<ReviewEvent[]>;
+
+  // --- review-latency report (JSON, git-tracked, overwritten each run) --------
+  /** Overwrite the point-in-time review-latency report. */
+  writeResponseReport(report: ResponseTimeReport): Promise<void>;
+  readResponseReport(): Promise<ResponseTimeReport | undefined>;
 
   close(): Promise<void>;
 }

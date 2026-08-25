@@ -10,6 +10,7 @@ import type {
   DifficultyBand,
   OpenPrsSnapshot,
   Override,
+  ResponseTimeReport,
 } from "../types.js";
 import { renderDashboardHtml } from "./generate.js";
 import { buildMetrics } from "./metrics.js";
@@ -21,6 +22,9 @@ export interface DashboardInput {
   /** Latest point-in-time open-PRs snapshot — powers the PR-age overview and
    *  per-reviewer waiting stats. Optional (older logs predate snapshots). */
   openPrs?: OpenPrsSnapshot;
+  /** Latest review-latency report — powers per-reviewer responsiveness stats.
+   *  Optional (older logs predate it). */
+  responseTimes?: ResponseTimeReport;
   /** ISO timestamp for the "generated at" footer — injected for determinism. */
   generatedAtIso: string;
 }

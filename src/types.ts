@@ -216,6 +216,35 @@ export interface OpenPrsSnapshot {
 }
 
 /**
+ * One reviewer's response to one assignment: how long they took from being
+ * assigned to leaving their first review on that PR. Computed by `daily` (which
+ * has the SQLite review-event data) and written to a git-tracked artifact so the
+ * store-free dashboard can render responsiveness without loading the addon.
+ */
+export interface ReviewResponse {
+  repo: string;
+  pr: number;
+  reviewer: string;
+  /** ISO timestamp Siara assigned this reviewer (assignment-log date, midnight UTC). */
+  assignedAt: string;
+  /** ISO timestamp of their first review on/after assignedAt, if any. */
+  firstReviewAt?: string;
+  /** Whole hours from assignedAt to firstReviewAt (present iff reviewed). */
+  latencyHours?: number;
+  /** True when the PR is still open and this reviewer has not yet reviewed. */
+  outstanding: boolean;
+  /** Whole hours from assignedAt to now (present iff outstanding). */
+  waitingHours?: number;
+}
+
+/** Review-latency report: point-in-time, overwritten each `daily` run. */
+export interface ResponseTimeReport {
+  /** ISO timestamp the report was computed. */
+  takenAt: string;
+  responses: ReviewResponse[];
+}
+
+/**
  * A manual reviewer change observed after Siara's auto-assignment: the PR's
  * live requested reviewers no longer match what Siara suggested. Logged (never
  * reverted) so the dashboard can report suggestion-acceptance over time.

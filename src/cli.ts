@@ -15,6 +15,7 @@ import { daily, dryRun, sync } from "./runtime/index.js";
 import { readAssignmentsFile } from "./store/assignmentsLog.js";
 import { overridesPathFor, readOverridesFile } from "./store/overridesLog.js";
 import { readOpenPrsSnapshot, snapshotPathFor } from "./store/snapshotLog.js";
+import { readResponseReport, responsePathFor } from "./store/responseLog.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -110,7 +111,14 @@ async function main(): Promise<void> {
     const assignments = readAssignmentsFile(ASSIGNMENTS_PATH);
     const overrides = readOverridesFile(overridesPathFor(ASSIGNMENTS_PATH));
     const openPrs = readOpenPrsSnapshot(snapshotPathFor(ASSIGNMENTS_PATH));
-    const html = generateDashboard({ assignments, overrides, openPrs, generatedAtIso: nowIso });
+    const responseTimes = readResponseReport(responsePathFor(ASSIGNMENTS_PATH));
+    const html = generateDashboard({
+      assignments,
+      overrides,
+      openPrs,
+      responseTimes,
+      generatedAtIso: nowIso,
+    });
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html, "utf8");
     console.log(`Dashboard written to ${outPath} (${assignments.length} assignment(s))`);

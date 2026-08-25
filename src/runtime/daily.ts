@@ -12,9 +12,10 @@ import type {
   OpenPrSnapshot,
   Override,
   PullRequest,
+  ReviewResponse,
 } from "../types.js";
 import { sync } from "./sync.js";
-import { daysBetween } from "./dates.js";
+import { daysBetween, hoursBetween, subtractDays } from "./dates.js";
 import { buildStalenessRepostText, stalenessLevel } from "./staleness.js";
 import type { DailyOptions, DailyPrResult, DailyResult, SiaraDeps } from "./index.js";
 
@@ -65,6 +66,90 @@ function assigneeLabel(pr: PullRequest): string {
     return pr.requestedReviewers[0] ?? "";
   }
   return "";
+}
+
+/** The latest assignment per PR (last write wins), within the sync window. */
+function latestAssignmentsInWindow(
+  assignments: Assignment[],
+  windowStartDate: string,
+): Map<string, Assignment> {
+  const map = new Map<string, Assignment>();
+  for (const a of assignments) {
+    if (a.date < windowStartDate) continue;
+    map.set(prKey(a.repo, a.pr), a);
+  }
+  return map;
+}
+
+/**
+ * Build the review-latency report. For each in-window assignment, measure the
+ * clock from assignment to each assigned reviewer's first review on/after that
+ * assignment. A reviewer with no such review on a still-open PR is outstanding.
+ */
+async function computeResponses(
+  deps: SiaraDeps,
+  nowIso: string,
+  openKeys: Set<string>,
+): Promise<ReviewResponse[]> {
+  const windowStartDate = subtractDays(nowIso, deps.teamConfig.syncWindowDays).slice(0, 10);
+  const latest = latestAssignmentsInWindow(
+    await deps.store.readAssignments(),
+    windowStartDate,
+  );
+
+  // Group PR numbers per repo so review events can be fetched in one query each.
+  const prNumbersByRepo = new Map<string, number[]>();
+  for (const a of latest.values()) {
+    const list = prNumbersByRepo.get(a.repo) ?? [];
+    list.push(a.pr);
+    prNumbersByRepo.set(a.repo, list);
+  }
+
+  // firstReviewAt[repo#pr\0login] = earliest review timestamp by that reviewer.
+  const firstReviewAt = new Map<string, string>();
+  for (const [repo, prNumbers] of prNumbersByRepo) {
+    const events = await deps.store.getReviewEvents(repo, prNumbers);
+    for (const ev of events) {
+      const key = `${prKey(repo, ev.pr)}\0${ev.login}`;
+      const prev = firstReviewAt.get(key);
+      if (prev === undefined || ev.reviewedAt < prev) {
+        firstReviewAt.set(key, ev.reviewedAt);
+      }
+    }
+  }
+
+  const responses: ReviewResponse[] = [];
+  for (const a of latest.values()) {
+    const key = prKey(a.repo, a.pr);
+    const assignedAt = `${a.date}T00:00:00.000Z`;
+    for (const reviewer of a.assignees) {
+      const reviewedAt = firstReviewAt.get(`${key}\0${reviewer}`);
+      // Only count a review that landed on/after the assignment (ignore an
+      // earlier re-review from a prior round).
+      if (reviewedAt !== undefined && reviewedAt >= assignedAt) {
+        responses.push({
+          repo: a.repo,
+          pr: a.pr,
+          reviewer,
+          assignedAt,
+          firstReviewAt: reviewedAt,
+          latencyHours: hoursBetween(assignedAt, reviewedAt),
+          outstanding: false,
+        });
+      } else if (openKeys.has(key)) {
+        responses.push({
+          repo: a.repo,
+          pr: a.pr,
+          reviewer,
+          assignedAt,
+          outstanding: true,
+          waitingHours: hoursBetween(assignedAt, nowIso),
+        });
+      }
+      // else: PR closed without a review from this reviewer → not reported.
+    }
+  }
+  return responses;
 }
 
 export async function daily(
@@ -210,6 +295,14 @@ export async function daily(
 
   if (!dry) {
     await deps.store.writeOpenPrsSnapshot({ takenAt: nowIso, prs: snapshotPrs });
+
+    // Review-latency report: for every assignment within the sync window, how
+    // long each assigned reviewer took to first review (or how long they've been
+    // outstanding on a still-open PR). Written to a git-tracked artifact so the
+    // store-free dashboard can render responsiveness.
+    const openKeys = new Set(snapshotPrs.map((p) => prKey(p.repo, p.pr)));
+    const responses = await computeResponses(deps, nowIso, openKeys);
+    await deps.store.writeResponseReport({ takenAt: nowIso, responses });
   }
 
   if (deps.slack && !dry && pendingForRepost.length > 0) {
