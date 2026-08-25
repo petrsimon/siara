@@ -34,6 +34,9 @@ export interface PullRequest {
   jiraKey?: string;
   /** ISO timestamp the PR was posted to the Slack workflow (drives staleness). */
   postedAt?: string;
+  /** ISO timestamp the PR was opened on GitHub — the real PR age, independent of
+   *  whether it was ever posted to Slack. Preferred for age/staleness. */
+  createdAt?: string;
 }
 
 // ---------------------------------------------------------------------------

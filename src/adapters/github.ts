@@ -34,6 +34,7 @@ interface GhPrListItem {
   author?: { login?: string | null } | null;
   files?: GhFileItem[];
   reviewRequests?: Array<{ login?: string | null } | null>;
+  createdAt?: string;
 }
 
 interface GhFileItem {
@@ -98,6 +99,7 @@ export function parsePullRequests(repo: string, json: unknown): PullRequest[] {
       files: parseFiles(raw.files ?? []),
       requestedReviewers,
       jiraKey: jiraFromBranch ?? jiraFromTitle,
+      ...(raw.createdAt ? { createdAt: raw.createdAt } : {}),
     });
   }
   return result;
@@ -233,7 +235,7 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
       "--state",
       "open",
       "--json",
-      "number,headRefName,author,title,files,reviewRequests",
+      "number,headRefName,author,title,files,reviewRequests,createdAt",
     ]);
     return parsePullRequests(repo, JSON.parse(stdout) as unknown);
   }

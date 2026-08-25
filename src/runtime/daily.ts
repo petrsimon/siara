@@ -183,7 +183,10 @@ export async function daily(
     assignees: string[],
     band: DifficultyBand | undefined,
   ): OpenPrSnapshot => {
-    const ageDays = pr.postedAt ? daysBetween(pr.postedAt, nowIso) : undefined;
+    // Prefer the GitHub open date (real PR age); fall back to the Slack post
+    // time for older data. Shadow runs never post, so createdAt is the only age.
+    const ageAnchor = pr.createdAt ?? pr.postedAt;
+    const ageDays = ageAnchor ? daysBetween(ageAnchor, nowIso) : undefined;
     const staleness =
       ageDays === undefined
         ? "normal"
