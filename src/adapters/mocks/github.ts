@@ -1,0 +1,102 @@
+import type { GitHubAdapter } from "../index.js";
+import type { PullRequest, RecentReview } from "../../types.js";
+
+export interface GitHubMockFixture {
+  /** Open PRs keyed by repo. */
+  openPullRequests?: Record<string, PullRequest[]>;
+  /** Per-PR file lists keyed by `${repo}#${prNumber}`. */
+  filesByPr?: Record<string, PullRequest["files"]>;
+  /** Commit counts keyed by repo → path → author login. */
+  commitHistory?: Record<string, Record<string, Record<string, number>>>;
+  /** Review history keyed by repo → login → reviews. */
+  reviewHistory?: Record<string, Record<string, RecentReview[]>>;
+  /** Open review load keyed by login. */
+  openReviewLoad?: Record<string, number>;
+}
+
+export interface RecordedComment {
+  repo: string;
+  prNumber: number;
+  body: string;
+}
+
+export interface RecordedReviewRequest {
+  repo: string;
+  prNumber: number;
+  logins: string[];
+}
+
+function prKey(repo: string, prNumber: number): string {
+  return `${repo}#${prNumber}`;
+}
+
+export class MockGitHubAdapter implements GitHubAdapter {
+  public readonly comments: RecordedComment[] = [];
+  public readonly reviewRequests: RecordedReviewRequest[] = [];
+
+  constructor(private readonly fixture: GitHubMockFixture = {}) {}
+
+  async listOpenPullRequests(repo: string): Promise<PullRequest[]> {
+    return this.fixture.openPullRequests?.[repo] ?? [];
+  }
+
+  async getPullRequestFiles(
+    repo: string,
+    prNumber: number,
+  ): Promise<PullRequest["files"]> {
+    return this.fixture.filesByPr?.[prKey(repo, prNumber)] ?? [];
+  }
+
+  async getCommitHistory(
+    repo: string,
+    paths: string[],
+    _sinceIso: string,
+  ): Promise<Record<string, Record<string, number>>> {
+    const repoHistory = this.fixture.commitHistory?.[repo] ?? {};
+    const result: Record<string, Record<string, number>> = {};
+    for (const path of paths) {
+      const authors = repoHistory[path];
+      if (authors) {
+        result[path] = { ...authors };
+      }
+    }
+    return result;
+  }
+
+  async getReviewHistory(
+    repo: string,
+    _sinceIso: string,
+  ): Promise<Record<string, RecentReview[]>> {
+    const repoReviews = this.fixture.reviewHistory?.[repo] ?? {};
+    const result: Record<string, RecentReview[]> = {};
+    for (const [login, reviews] of Object.entries(repoReviews)) {
+      result[login] = [...reviews];
+    }
+    return result;
+  }
+
+  async getOpenReviewLoad(logins: string[]): Promise<Record<string, number>> {
+    const loads = this.fixture.openReviewLoad ?? {};
+    const result: Record<string, number> = {};
+    for (const login of logins) {
+      result[login] = loads[login] ?? 0;
+    }
+    return result;
+  }
+
+  async postComment(
+    repo: string,
+    prNumber: number,
+    body: string,
+  ): Promise<void> {
+    this.comments.push({ repo, prNumber, body });
+  }
+
+  async requestReviewers(
+    repo: string,
+    prNumber: number,
+    logins: string[],
+  ): Promise<void> {
+    this.reviewRequests.push({ repo, prNumber, logins: [...logins] });
+  }
+}
