@@ -311,16 +311,27 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
     const result: Record<string, number> = {};
     for (const login of logins) {
       try {
+        // total_count, not page length: `gh search prs` returns only 30 results,
+        // so array length caps every reviewer at 30 and flattens the signal.
+        //
+        // user-review-requested (NOT review-requested): the latter also counts
+        // PRs requested from any CODEOWNERS *team* the login belongs to, which
+        // inflates load ~15x and measures team membership, not personal queue.
+        // user-review-requested counts only direct individual requests. Org-wide
+        // (unscoped) on purpose — total human review burden is the load signal.
+        // login is pre-validated (LOGIN_RE).
         const stdout = await runGh([
-          "search",
-          "prs",
-          `--review-requested=${login}`,
-          "--state=open",
-          "--json",
-          "number",
+          "api",
+          "-X",
+          "GET",
+          "search/issues",
+          "--raw-field",
+          `q=is:pr is:open user-review-requested:${login}`,
+          "--jq",
+          ".total_count",
         ]);
-        const parsed = JSON.parse(stdout) as unknown;
-        result[login] = Array.isArray(parsed) ? parsed.length : 0;
+        const count = Number.parseInt(stdout.trim(), 10);
+        result[login] = Number.isFinite(count) ? count : 0;
       } catch {
         result[login] = 0;
       }
