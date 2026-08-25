@@ -1,0 +1,55 @@
+/**
+ * Runtime contract: dependency bundle + top-level entrypoints (sync / daily /
+ * dry-run). These signatures are LOCKED — sync.ts, daily.ts, and dryRun.ts
+ * implement them; the CLI and the real adapters depend on them.
+ */
+import type { GitHubAdapter, JiraAdapter, SlackAdapter } from "../adapters/index.js";
+import type { SiaraRepoConfig, SiaraTeamConfig } from "../config.js";
+import type { SiaraStore } from "../store/index.js";
+import type { Assignment } from "../types.js";
+
+/** Everything a runtime entrypoint needs, injected for testability. */
+export interface SiaraDeps {
+  store: SiaraStore;
+  github: GitHubAdapter;
+  jira: JiraAdapter;
+  /** Optional — daily posts to Slack when present. */
+  slack?: SlackAdapter;
+  teamConfig: SiaraTeamConfig;
+  /** Per-repo overrides; repos to operate on are the union of these + team scope. */
+  repoConfigs: SiaraRepoConfig[];
+  /** Repos to process (e.g. "org/name"). */
+  repos: string[];
+}
+
+export interface SyncResult {
+  repo: string;
+  /** True = full cold-start sync; false = incremental. */
+  coldStart: boolean;
+  syncedAtIso: string;
+}
+
+export interface DailyOptions {
+  /** When true, compute + print but perform NO side effects (no comments, no
+   * review requests, no Slack posts, no JSONL append). */
+  dryRun?: boolean;
+}
+
+export interface DailyPrResult {
+  repo: string;
+  pr: number;
+  assignees: string[];
+  band: Assignment["band"];
+  rationale: string;
+}
+
+export interface DailyResult {
+  synced: SyncResult[];
+  assigned: DailyPrResult[];
+}
+
+// --- entrypoints (implemented in sibling files) ------------------------------
+
+export { sync } from "./sync.js";
+export { daily } from "./daily.js";
+export { dryRun } from "./dryRun.js";
