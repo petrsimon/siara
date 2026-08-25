@@ -120,10 +120,24 @@ async function main(): Promise<void> {
     // so a missing/invalid config degrades to logins + default thresholds.
     let reviewers: Record<string, { name?: string; email?: string }> | undefined;
     let staleness: { warningDays: number; overdueDays: number } | undefined;
+    let algorithm: Parameters<typeof generateDashboard>[0]["algorithm"];
     try {
       const { teamConfig } = loadConfig();
       reviewers = teamConfig.reviewers;
       staleness = teamConfig.staleness;
+      // Surface the live scoring knobs so the "How it works" doc can't drift.
+      algorithm = {
+        reviewersPerPr: teamConfig.reviewersPerPr,
+        bands: teamConfig.difficulty.bands,
+        availability: {
+          loadWeight: teamConfig.availability.loadWeight,
+          busyWeight: teamConfig.availability.busyWeight,
+          bandWeight: teamConfig.availability.bandWeight,
+          hardWipLimit: teamConfig.availability.hardWipLimit,
+          hardWipPenalty: teamConfig.availability.hardWipPenalty,
+          maxPenaltyFraction: teamConfig.availability.maxPenaltyFraction,
+        },
+      };
     } catch {
       // No config available — fall back to defaults inside the renderer.
     }
@@ -134,6 +148,7 @@ async function main(): Promise<void> {
       responseTimes,
       reviewers,
       staleness,
+      algorithm,
       generatedAtIso: nowIso,
     });
     mkdirSync(dirname(outPath), { recursive: true });

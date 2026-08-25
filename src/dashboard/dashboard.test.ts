@@ -396,6 +396,35 @@ describe("generateDashboard", () => {
     expect(html).not.toContain("Workload breakdown");
   });
 
+  it("renders the How-it-works doc with a pipeline diagram and live knobs", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["alice"], band: "hard", pr: 1 })],
+      algorithm: {
+        reviewersPerPr: 1,
+        bands: { simple: 0.3, hard: 0.6 },
+        availability: {
+          loadWeight: 0.12,
+          busyWeight: 0.15,
+          bandWeight: { simple: 0.6, moderate: 0.7, hard: 1.0 },
+          hardWipLimit: 3,
+          hardWipPenalty: 0.5,
+          maxPenaltyFraction: 0.9,
+        },
+      },
+      generatedAtIso,
+    });
+    // Its own tab + panel.
+    expect(html).toContain('data-tab="how"');
+    expect(html).toContain('id="tab-how"');
+    expect(html).toContain("How it works");
+    // The pipeline diagram (arrow marker) and the WIP cap explained with live values.
+    expect(html).toContain('id="arw"');
+    expect(html).toContain("WhoDo");
+    // Live knobs echoed (load weight + WIP limit), not hard-coded prose.
+    expect(html).toContain("<code>0.12</code>");
+    expect(html).toContain("<code>3</code>");
+  });
+
   it("renders the open-PRs age overview and per-reviewer waiting stats", () => {
     const html = generateDashboard({
       assignments: [assignment({ assignees: ["bob"], band: "hard", pr: 7 })],

@@ -30,6 +30,20 @@ export interface DashboardInput {
   reviewers?: Record<string, { name?: string; email?: string }>;
   /** Age → colour thresholds (days). Loaded from config; absent → defaults. */
   staleness?: { warningDays: number; overdueDays: number };
+  /** Live scoring knobs, surfaced in the "How it works" doc so the explanation
+   *  never drifts from the running config. Absent → shipped defaults are shown. */
+  algorithm?: {
+    reviewersPerPr: number;
+    bands: { simple: number; hard: number };
+    availability: {
+      loadWeight: number;
+      busyWeight: number;
+      bandWeight: { simple: number; moderate: number; hard: number };
+      hardWipLimit: number;
+      hardWipPenalty: number;
+      maxPenaltyFraction: number;
+    };
+  };
   /** ISO timestamp for the "generated at" footer — injected for determinism. */
   generatedAtIso: string;
 }

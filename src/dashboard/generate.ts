@@ -44,6 +44,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const responseSection = renderResponseSection(input.responseTimes?.responses ?? [], dir);
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
+  const algorithmSection = renderAlgorithmSection(input.algorithm);
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -85,6 +86,7 @@ ${STYLES}
     <nav class="tabs" role="tablist">
       <button class="tab active" type="button" data-tab="overview">Dashboard</button>
       <button class="tab" type="button" data-tab="open-prs">Open PRs</button>
+      <button class="tab" type="button" data-tab="how">How it works</button>
     </nav>
 
     <div class="tab-panel" id="tab-overview">
@@ -145,6 +147,10 @@ ${STYLES}
 
     <div class="tab-panel hidden" id="tab-open-prs">
     ${openPrsSection}
+    </div>
+
+    <div class="tab-panel hidden" id="tab-how">
+    ${algorithmSection}
     </div>
 
     <footer>Generated at ${generatedAt}</footer>
@@ -753,6 +759,105 @@ function renderOpenPrsSection(
     </section>`;
 }
 
+/** Shipped defaults, so the doc renders truthfully even without a config. */
+const DEFAULT_ALGO: NonNullable<DashboardInput["algorithm"]> = {
+  reviewersPerPr: 1,
+  bands: { simple: 0.3, hard: 0.6 },
+  availability: {
+    loadWeight: 0.12,
+    busyWeight: 0.15,
+    bandWeight: { simple: 0.6, moderate: 0.7, hard: 1.0 },
+    hardWipLimit: 3,
+    hardWipPenalty: 0.5,
+    maxPenaltyFraction: 0.9,
+  },
+};
+
+/** One labelled box in the pipeline diagram. */
+function stageBox(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  title: string,
+  sub: string,
+): string {
+  const cx = x + w / 2;
+  return (
+    `<rect x="${fmt(x)}" y="${y}" width="${fmt(w)}" height="${h}" rx="8" fill="var(--surface)" stroke="var(--border)"/>` +
+    `<text x="${fmt(cx)}" y="${y + h / 2 - 6}" class="svg-label" text-anchor="middle" dominant-baseline="central" style="font-weight:600">${escapeHtml(title)}</text>` +
+    `<text x="${fmt(cx)}" y="${y + h / 2 + 11}" class="svg-tick" text-anchor="middle" dominant-baseline="central">${escapeHtml(sub)}</text>`
+  );
+}
+
+/**
+ * "How it works" — the scoring pipeline as a left→right diagram plus a prose
+ * explanation of the fairness policy, with the LIVE knob values so the doc can't
+ * drift from the running config. Grounded in the load-balancing literature the
+ * policy is drawn from (WhoDo, Sofia).
+ */
+function renderAlgorithmSection(
+  algo: DashboardInput["algorithm"],
+): string {
+  const a = algo ?? DEFAULT_ALGO;
+  const av = a.availability;
+
+  const stages: Array<[string, string]> = [
+    ["PR", "diff + paths"],
+    ["Difficulty", "size × risk"],
+    ["Band", "simple/mod/hard"],
+    ["Route", "by band"],
+    ["Penalty", "load·busy·WIP"],
+    ["Pick", `top-${a.reviewersPerPr}`],
+  ];
+  const W = 640;
+  const boxH = 46;
+  const boxW = 92;
+  const gap = (W - stages.length * boxW) / (stages.length - 1);
+  const y = 8;
+  let px = 0;
+  const boxes: string[] = [];
+  const arrows: string[] = [];
+  stages.forEach(([t, s], i) => {
+    boxes.push(stageBox(px, y, boxW, boxH, t, s));
+    if (i < stages.length - 1) {
+      const ax = px + boxW;
+      const ay = y + boxH / 2;
+      arrows.push(
+        `<line x1="${fmt(ax + 2)}" y1="${ay}" x2="${fmt(ax + gap - 2)}" y2="${ay}" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arw)"/>`,
+      );
+    }
+    px += boxW + gap;
+  });
+  const defs = `<defs><marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>`;
+  const diagram = svg(W, boxH + 16, defs + arrows.join("") + boxes.join(""), "Scoring pipeline");
+
+  // Band-routing rows.
+  const routing = `
+    <table>
+      <thead><tr><th>Band</th><th>Boundary</th><th>Who wins</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge" style="background:var(--band-simple)">Simple</span></td><td class="count">&lt; ${a.bands.simple}</td><td><strong>Lowest</strong> familiarity</td><td>education — spread knowledge to newcomers</td></tr>
+        <tr><td><span class="badge" style="background:var(--band-moderate)">Moderate</span></td><td class="count">${a.bands.simple}–${a.bands.hard}</td><td>Familiarity + knowledge blend</td><td>balance learning and safety</td></tr>
+        <tr><td><span class="badge" style="background:var(--band-hard)">Hard</span></td><td class="count">≥ ${a.bands.hard}</td><td><strong>Highest</strong> knowledge (expert)</td><td>quality — route risk to who knows the code</td></tr>
+      </tbody>
+    </table>`;
+
+  return `<section>
+      <h2>How it works</h2>
+      <p class="section-hint">Deterministic, no LLM: identical inputs always produce identical assignments (ties broken by a seeded dice). Below are the live scoring knobs — this doc tracks the running config.</p>
+      ${diagram}
+      <h3 class="algo-h3">1 · Difficulty → band</h3>
+      <p class="algo-p">Each PR gets a 0–1 difficulty from churn, file count, and directory spread, then multiplied up for risky paths (auth, crypto, migrations, secrets…). The score falls into a band that decides <em>how</em> to route:</p>
+      ${routing}
+      <h3 class="algo-h3">2 · Availability penalty (soft, capped)</h3>
+      <p class="algo-p">Each candidate's band score is reduced by <code>bandWeight[band] × (loadWeight·openLoad + busyWeight·jiraBusy + managerPenalty + hardWIP)</code>, capped at <strong>${Math.round(av.maxPenaltyFraction * 100)}%</strong> of their score so it re-orders peers but never excludes a sole expert. PTO adds a large uncapped penalty on top. Live weights: load <code>${av.loadWeight}</code>/open review, busy <code>${av.busyWeight}</code>/unit, band scaling simple <code>${av.bandWeight.simple}</code> · moderate <code>${av.bandWeight.moderate}</code> · hard <code>${av.bandWeight.hard}</code>.</p>
+      <h3 class="algo-h3">3 · Fairness: spread low-risk, cap high-risk</h3>
+      <p class="algo-p">Simple PRs (the bulk) are spread by load so no one sweeps a repo — that's why <code>bandWeight.simple</code> is high. Hard PRs still go to experts, but a <strong>WIP cap</strong> stops one expert being bombarded: past <code>${av.hardWipLimit}</code> concurrent hard reviews, each extra adds <code>${av.hardWipPenalty}</code> penalty so the 4th+ overflows to the next expert — yet, being inside the ${Math.round(av.maxPenaltyFraction * 100)}% cap, a hard PR is never dumped on a zero-knowledge stranger. Model: expertise + workload balancing (Asthana et&nbsp;al., <em>WhoDo</em>, FSE'19) with knowledge distribution (Mirsaeedi &amp; Rigby, <em>Sofia</em>, ICSE'20).</p>
+      <p class="algo-p">Candidates are then ranked by final score → open load → seeded dice, and the top ${a.reviewersPerPr} chosen. The <em>Reviews per person</em> and <em>Assignment flow</em> charts show the result; <em>Gini (workload)</em> quantifies how even it is.</p>
+    </section>`;
+}
+
 function renderLegend(): string {
   const items = BANDS.map(
     (band) =>
@@ -980,6 +1085,13 @@ const STYLES = `
     .donut-legend { min-width: 140px; }
 
     .empty { color: var(--muted); font-size: 0.9rem; margin: 0.5rem 0; }
+
+    .algo-h3 { margin: 1.4rem 0 0.35rem; font-size: 0.9rem; font-weight: 620; }
+    .algo-p { margin: 0 0 0.6rem; font-size: 0.86rem; color: var(--text); }
+    .algo-p code {
+      font-size: 0.82em; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 4px; padding: 0.05rem 0.3rem; font-variant-numeric: tabular-nums;
+    }
 
     table { width: 100%; border-collapse: collapse; }
     th, td {
