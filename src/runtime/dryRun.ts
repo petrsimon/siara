@@ -4,13 +4,14 @@
  * Thin wrapper over daily(deps, now, { dryRun: true }) plus formatted output.
  */
 import { daily } from "./daily.js";
-import type { DailyPrResult, DailyResult, SiaraDeps } from "./index.js";
+import type { DailyOptions, DailyPrResult, DailyResult, SiaraDeps } from "./index.js";
 
 export async function dryRun(
   deps: SiaraDeps,
   nowIso: string,
+  opts: Pick<DailyOptions, "noSync"> = {},
 ): Promise<DailyResult> {
-  return daily(deps, nowIso, { dryRun: true });
+  return daily(deps, nowIso, { dryRun: true, noSync: opts.noSync });
 }
 
 function formatPrBlock(pr: DailyPrResult): string {

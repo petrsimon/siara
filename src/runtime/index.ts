@@ -42,6 +42,10 @@ export interface DailyOptions {
   /** When true, compute + print but perform NO side effects (no comments, no
    * review requests, no Slack posts, no JSONL append). */
   dryRun?: boolean;
+  /** When true, skip the sync step and score from the cached store. Open PRs
+   * are still listed fresh; commit/review/load signals come from the last sync.
+   * Fast iteration on scoring/config without a full re-sync. */
+  noSync?: boolean;
 }
 
 export interface DailyPrResult {

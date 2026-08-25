@@ -32,7 +32,7 @@ export async function daily(
   opts: DailyOptions = {},
 ): Promise<DailyResult> {
   const dry = opts.dryRun === true;
-  const synced = await sync(deps, nowIso);
+  const synced = opts.noSync === true ? [] : await sync(deps, nowIso);
   const assigned: DailyPrResult[] = [];
   const assigneesByPr = new Map<string, string[]>();
   const pendingForRepost: PullRequest[] = [];

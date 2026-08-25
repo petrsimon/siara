@@ -17,10 +17,13 @@ const USAGE = `Siara — deterministic PR reviewer assigner
 
 Usage:
   siara sync              Fetch GitHub/Jira signals into the local store
-  siara daily             Assign reviewers for pending PRs
-  siara dry-run           Score pending PRs without side effects
+  siara daily [--no-sync]     Assign reviewers for pending PRs
+  siara dry-run [--no-sync]   Score pending PRs without side effects
   siara dashboard [--out <file>]   Generate HTML dashboard (default: ./dashboard.html)
   siara --help            Show this help
+
+Flags:
+  --no-sync   Skip the sync step; score from the cached store (fast iteration)
 
 Environment:
   SIARA_CONFIG   Path to config JSON (default: ./siara.config.json)
@@ -50,6 +53,7 @@ async function main(): Promise<void> {
   }
 
   const nowIso = new Date().toISOString();
+  const noSync = process.argv.includes("--no-sync");
 
   // Dashboard only reads the git-tracked JSONL log — no config, adapters, or
   // SQLite (avoids loading the better-sqlite3 native addon entirely).
@@ -105,7 +109,7 @@ async function main(): Promise<void> {
         break;
       }
       case "daily": {
-        const result = await daily(deps, nowIso);
+        const result = await daily(deps, nowIso, { noSync });
         for (const s of result.synced) {
           const mode = s.coldStart ? "cold start" : "incremental";
           console.log(`Synced ${s.repo} (${mode})`);
@@ -126,7 +130,7 @@ async function main(): Promise<void> {
         break;
       }
       case "dry-run": {
-        const result = await dryRun(deps, nowIso);
+        const result = await dryRun(deps, nowIso, { noSync });
         if (result.assigned.length === 0) {
           console.log("[DRY RUN] No pending PRs to score.");
         } else {

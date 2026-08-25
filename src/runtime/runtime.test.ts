@@ -179,6 +179,19 @@ describe("daily dry-run", () => {
     expect(slack.reposts).toEqual([]);
     expect(await store.readAssignments()).toEqual([]);
   });
+
+  it("noSync scores from the cached store without a sync pass", async () => {
+    const pr = pullRequest({ number: 11, author: "author", files: simpleFiles() });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pr] },
+    });
+    const deps = makeDeps(github, store);
+
+    const result = await dryRun(deps, NOW, { noSync: true });
+
+    expect(result.synced).toEqual([]);
+    expect(result.assigned).toHaveLength(1);
+  });
 });
 
 describe("daily live", () => {
