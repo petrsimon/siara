@@ -19,6 +19,7 @@ import type {
   ScoredCandidate,
 } from "../types.js";
 import { seededDice } from "../util/dice.js";
+import { availabilityPenalty, isReviewerUnavailable } from "./availability.js";
 import { scoreDifficulty } from "./difficulty.js";
 import { scoreFamiliarity } from "./familiarity.js";
 import { scoreFilesAtRisk } from "./filesAtRisk.js";
@@ -92,7 +93,8 @@ function sumBoosts(c: ScoredCandidate): number {
     c.boosts.followUp +
     c.boosts.filesAtRisk +
     c.boosts.softEstimate +
-    c.boosts.softPriority
+    c.boosts.softPriority +
+    c.boosts.availability
   );
 }
 
@@ -122,9 +124,46 @@ export function pickReviewers(input: PickInput): PickResult {
     const spreadBoost = filesAtRisk.boosts[c.login] ?? 0;
     if (followUpBoost > 0) notes.push(`follow-up affinity +${followUpBoost.toFixed(2)}`);
     if (spreadBoost > 0) notes.push(`files-at-risk spread +${spreadBoost.toFixed(2)}`);
+
+    // Availability penalty: manager role + jira-busy + open load, band-scaled.
+    // Stored as a negative boost so it flows through the same sort/rationale path.
+    // Capped at a fraction of the primary score so it stays SOFT — a sole expert
+    // keeps at least (1 - maxPenaltyFraction) of their score and is never flipped
+    // below a zero-knowledge peer (availability de-prioritizes, never excludes).
+    const primary = primaryScore(difficulty.band, fam, know);
+    const unavailable = isReviewerUnavailable(config.reviewers[c.login], nowIso);
+    // Soft penalty (load/busy/manager) is capped so a strong expert is never
+    // flipped below a zero-knowledge peer by busyness alone. The PTO penalty is
+    // deliberately UNCAPPED and added on top: PTO *should* flip an expert below
+    // an available peer, yet a sole-viable reviewer still stays assignable
+    // (they remain the top of the ranked list even at a negative score).
+    const softRaw = availabilityPenalty({
+      login: c.login,
+      band: difficulty.band,
+      openReviewLoad: c.openReviewLoad,
+      jiraBusy: c.jiraBusy,
+      team: config,
+    });
+    const cappedSoft = Math.min(
+      softRaw,
+      primary * config.availability.maxPenaltyFraction,
+    );
+    const penalty =
+      cappedSoft + (unavailable ? config.availability.unavailablePenalty : 0);
+    if (penalty > 1e-9) {
+      const parts: string[] = [];
+      if (unavailable) parts.push("PTO/unavailable");
+      if (config.managers.includes(c.login) && difficulty.band !== "simple") {
+        parts.push("manager");
+      }
+      if (c.jiraBusy > 0) parts.push("busy");
+      if (c.openReviewLoad > 0) parts.push("load");
+      notes.push(`availability −${penalty.toFixed(2)} (${parts.join("+") || "load"})`);
+    }
+
     return {
       login: c.login,
-      primaryScore: primaryScore(difficulty.band, fam, know),
+      primaryScore: primary,
       familiarity: fam,
       knowledge: know,
       boosts: {
@@ -132,6 +171,7 @@ export function pickReviewers(input: PickInput): PickResult {
         filesAtRisk: spreadBoost,
         softEstimate: 0,
         softPriority: 0,
+        availability: penalty > 0 ? -penalty : 0,
       },
       openReviewLoad: c.openReviewLoad,
       notes,

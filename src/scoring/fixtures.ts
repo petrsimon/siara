@@ -38,6 +38,7 @@ export function candidate(
     commitsByPath: {},
     repoReviewCount: 0,
     openReviewLoad: 0,
+    jiraBusy: 0,
     recentReviews: [],
     ...partial,
   };
@@ -72,6 +73,7 @@ export function scored(
       filesAtRisk: 0,
       softEstimate: 0,
       softPriority: 0,
+      availability: 0,
     },
     openReviewLoad: 0,
     notes: [],

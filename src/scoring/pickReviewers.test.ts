@@ -255,4 +255,145 @@ describe("pickReviewers", () => {
       expect(result.assignees).toEqual([]);
     });
   });
+
+  describe("availability penalty", () => {
+    it("demotes a busy manager below a free expert on a hard PR", () => {
+      // Both are strong experts on the hard diff; boss is manager + jira-busy.
+      const commits = Object.fromEntries(
+        hardFiles().map((f) => [f.path, 10]),
+      );
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: hardFiles() }),
+        config: testConfig({
+          roster: ["boss", "dev"],
+          managers: ["boss"],
+        }),
+        candidates: [
+          candidate("boss", { commitsByPath: commits, jiraBusy: 3, openReviewLoad: 8 }),
+          candidate("dev", { commitsByPath: commits }),
+        ],
+        nowIso: NOW,
+      });
+
+      expect(result.assignees).toEqual(["dev"]);
+      const boss = result.ranked.find((c) => c.login === "boss");
+      expect(boss?.boosts.availability).toBeLessThan(0);
+      expect(boss?.notes.some((n) => n.includes("availability"))).toBe(true);
+    });
+
+    it("still picks a manager who is the sole expert (soft, not exclusion)", () => {
+      const commits = Object.fromEntries(
+        hardFiles().map((f) => [f.path, 10]),
+      );
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: hardFiles() }),
+        config: testConfig({
+          roster: ["boss", "novice"],
+          managers: ["boss"],
+        }),
+        candidates: [
+          candidate("boss", { commitsByPath: commits }),
+          candidate("novice"),
+        ],
+        nowIso: NOW,
+      });
+
+      // Manager penalty (0.6 on hard) reduces boss but never drops the sole
+      // expert below a zero-knowledge peer.
+      expect(result.assignees).toEqual(["boss"]);
+    });
+
+    it("caps the penalty at maxPenaltyFraction of the primary score", () => {
+      const commits = Object.fromEntries(
+        hardFiles().map((f) => [f.path, 10]),
+      );
+      // Extreme busy+load+manager: raw penalty (~1.29) would exceed knowledge (1),
+      // but the cap keeps ≥10% of the primary score.
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: hardFiles() }),
+        config: testConfig({ roster: ["boss"], managers: ["boss"] }),
+        candidates: [
+          candidate("boss", { commitsByPath: commits, jiraBusy: 3, openReviewLoad: 8 }),
+        ],
+        nowIso: NOW,
+      });
+
+      const boss = result.ranked.find((c) => c.login === "boss");
+      expect(boss).toBeDefined();
+      // primary=1, cap=0.9 → availability = -0.9, final ≥ 0.1.
+      expect(boss!.boosts.availability).toBeCloseTo(-0.9);
+      expect(result.finalScoreByLogin["boss"]).toBeGreaterThan(0);
+    });
+
+    it("does not penalize a manager on a simple PR", () => {
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: simpleFiles() }),
+        config: testConfig({ roster: ["boss", "dev"], managers: ["boss"] }),
+        candidates: [candidate("boss"), candidate("dev")],
+        nowIso: NOW,
+      });
+
+      const boss = result.ranked.find((c) => c.login === "boss");
+      expect(boss?.boosts.availability).toBe(0);
+    });
+  });
+
+  describe("PTO / unavailable (strong soft penalty)", () => {
+    const path = "src/a/mod0.ts";
+
+    it("sinks an unavailable expert below an available peer on a hard PR", () => {
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: hardFiles() }),
+        config: testConfig({
+          roster: ["expert", "peer"],
+          reviewers: { expert: { unavailable: true } },
+        }),
+        candidates: [
+          candidate("expert", { commitsByPath: { [path]: 20 } }),
+          candidate("peer", { commitsByPath: { [path]: 2 } }),
+        ],
+        nowIso: NOW,
+      });
+
+      // Expert has more knowledge but is on PTO → peer wins.
+      expect(result.assignees).toEqual(["peer"]);
+      const expert = result.ranked.find((c) => c.login === "expert");
+      expect(expert!.boosts.availability).toBeLessThan(0);
+      expect(expert!.notes.some((n) => n.includes("PTO/unavailable"))).toBe(true);
+    });
+
+    it("still assigns an unavailable reviewer when they are the sole viable one", () => {
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: hardFiles() }),
+        config: testConfig({
+          roster: ["solo"],
+          reviewers: { solo: { unavailable: true } },
+        }),
+        candidates: [candidate("solo", { commitsByPath: { [path]: 20 } })],
+        nowIso: NOW,
+      });
+
+      // Sole viable reviewer is still assigned even though PTO drives their
+      // score negative — they remain the top of the ranked list.
+      expect(result.assignees).toEqual(["solo"]);
+      expect(result.ranked[0]?.login).toBe("solo");
+    });
+
+    it("ignores an unavailable flag whose until date has passed", () => {
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: hardFiles() }),
+        config: testConfig({
+          roster: ["expert", "peer"],
+          reviewers: { expert: { unavailable: true, until: "2026-01-10" } },
+        }),
+        candidates: [
+          candidate("expert", { commitsByPath: { [path]: 20 } }),
+          candidate("peer", { commitsByPath: { [path]: 2 } }),
+        ],
+        nowIso: NOW, // 2026-01-15 → PTO expired
+      });
+
+      expect(result.assignees).toEqual(["expert"]);
+    });
+  });
 });

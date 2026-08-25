@@ -71,6 +71,23 @@ export async function sync(
   const openLoad = await deps.github.getOpenReviewLoad(roster);
   await deps.store.upsertOpenLoad(openLoad);
 
+  // "Heads-down" busy weight is also global. Manual `reviewerBusy` config is the
+  // baseline; a real Jira workload query (stub {} for now) overrides per-login.
+  const busyLoad: Record<string, number> = {};
+  for (const login of roster) {
+    // The editable `reviewers` map wins over the legacy `reviewerBusy` map.
+    const manual =
+      deps.teamConfig.reviewers[login]?.busy ?? deps.teamConfig.reviewerBusy[login];
+    if (manual !== undefined) {
+      busyLoad[login] = manual;
+    }
+  }
+  const jiraWorkload = await deps.jira.getReviewerWorkload(roster);
+  for (const [login, weight] of Object.entries(jiraWorkload)) {
+    busyLoad[login] = weight;
+  }
+  await deps.store.upsertBusyLoad(busyLoad);
+
   for (const repo of deps.repos) {
     const lastSyncAt = await deps.store.getLastSyncAt(repo);
     const coldStart = lastSyncAt === undefined;
