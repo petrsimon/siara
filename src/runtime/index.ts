@@ -46,6 +46,11 @@ export interface DailyOptions {
    * are still listed fresh; commit/review/load signals come from the last sync.
    * Fast iteration on scoring/config without a full re-sync. */
   noSync?: boolean;
+  /** When false, run "shadow mode": compute assignments and write the local
+   * git-tracked artifacts (assignment log, snapshot, response-times) but post
+   * NOTHING to GitHub or Slack. The log is deduped per PR so repeated runs don't
+   * bloat it. Defaults to true (post). Ignored when dryRun is true. */
+  post?: boolean;
 }
 
 export interface DailyPrResult {

@@ -158,6 +158,8 @@ export async function daily(
   opts: DailyOptions = {},
 ): Promise<DailyResult> {
   const dry = opts.dryRun === true;
+  // Shadow mode: write local artifacts but post nothing externally.
+  const doPost = !dry && opts.post !== false;
   const synced = opts.noSync === true ? [] : await sync(deps, nowIso);
   const assigned: DailyPrResult[] = [];
   const assigneesByPr = new Map<string, string[]>();
@@ -271,12 +273,22 @@ export async function daily(
       assigneesByPr.set(`${repo}#${pr.number}`, result.assignees);
 
       if (!dry && result.assignees.length > 0) {
-        await deps.github.postComment(repo, pr.number, rationale);
-        await deps.github.requestReviewers(repo, pr.number, result.assignees);
-        if (deps.slack) {
-          await deps.slack.postAssignment(undefined, rationale);
+        if (doPost) {
+          await deps.github.postComment(repo, pr.number, rationale);
+          await deps.github.requestReviewers(repo, pr.number, result.assignees);
+          if (deps.slack) {
+            await deps.slack.postAssignment(undefined, rationale);
+          }
         }
-        await deps.store.appendAssignment(assignment);
+        // Dedup the log: in shadow mode a PR stays "new" every run (we never set
+        // a reviewer on GitHub), so only append when the recommendation is new
+        // or has changed since the last logged pick for this PR.
+        const prevPick = suggestions.get(prKey(repo, pr.number));
+        const pick = [...result.assignees].sort();
+        if (!prevPick || !sameSet(prevPick, pick)) {
+          await deps.store.appendAssignment(assignment);
+          suggestions.set(prKey(repo, pr.number), pick);
+        }
       }
 
       assigned.push({
@@ -305,7 +317,7 @@ export async function daily(
     await deps.store.writeResponseReport({ takenAt: nowIso, responses });
   }
 
-  if (deps.slack && !dry && pendingForRepost.length > 0) {
+  if (deps.slack && doPost && pendingForRepost.length > 0) {
     const repostText = buildStalenessRepostText(
       pendingForRepost,
       nowIso,

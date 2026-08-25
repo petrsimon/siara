@@ -25,7 +25,8 @@ const USAGE = `Siara — deterministic PR reviewer assigner
 
 Usage:
   siara sync              Fetch GitHub/Jira signals into the local store
-  siara daily [--no-sync]     Assign reviewers for pending PRs
+  siara daily [--no-sync] [--no-post]   Assign reviewers for pending PRs
+  siara shadow [--no-sync]    Compute + log recommendations; post nothing (shadow mode)
   siara dry-run [--no-sync]   Score pending PRs without side effects
   siara dashboard [--out <file>]   Generate HTML dashboard (default: ./dashboard.html)
   siara admin [--port <n>]    Local editable reviewer admin page (default: 4319)
@@ -33,6 +34,7 @@ Usage:
 
 Flags:
   --no-sync   Skip the sync step; score from the cached store (fast iteration)
+  --no-post   Compute + write local artifacts but post nothing to GitHub/Slack
 
 Environment:
   SIARA_CONFIG   Path to config JSON (default: ./siara.config.json)
@@ -103,6 +105,7 @@ async function main(): Promise<void> {
 
   const nowIso = new Date().toISOString();
   const noSync = process.argv.includes("--no-sync");
+  const noPost = process.argv.includes("--no-post");
 
   // Dashboard only reads the git-tracked JSONL log — no config, adapters, or
   // SQLite (avoids loading the better-sqlite3 native addon entirely).
@@ -196,8 +199,14 @@ async function main(): Promise<void> {
         }
         break;
       }
+      case "shadow":
       case "daily": {
-        const result = await daily(deps, nowIso, { noSync });
+        // `shadow` = daily that posts nothing (also via `daily --no-post`).
+        const post = command === "shadow" ? false : !noPost;
+        const result = await daily(deps, nowIso, { noSync, post });
+        if (!post) {
+          console.log("[SHADOW] Computing recommendations — no GitHub or Slack posts.");
+        }
         for (const s of result.synced) {
           const mode = s.coldStart ? "cold start" : "incremental";
           console.log(`Synced ${s.repo} (${mode})`);

@@ -273,6 +273,36 @@ describe("daily live", () => {
     });
   });
 
+  it("shadow mode logs recommendations + artifacts but posts nothing, deduped", async () => {
+    const pr = pullRequest({ number: 60, author: "author", files: simpleFiles() });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pr] },
+      commitHistory: {
+        [REPO]: { "src/auth/login.ts": { bob: 8 }, "src/auth/session.ts": { bob: 6 } },
+      },
+    });
+    const slack = new MockSlackAdapter();
+    const deps = makeDeps(github, store, { slack });
+
+    const first = await daily(deps, NOW, { post: false });
+    expect(first.assigned[0]?.assignees.length).toBeGreaterThan(0);
+
+    // No external side effects.
+    expect(github.comments).toEqual([]);
+    expect(github.reviewRequests).toEqual([]);
+    expect(slack.assignments).toEqual([]);
+    expect(slack.reposts).toEqual([]);
+
+    // But the local artifacts are written.
+    expect(await store.readAssignments()).toHaveLength(1);
+    expect((await store.readOpenPrsSnapshot())?.prs).toHaveLength(1);
+    expect(await store.readResponseReport()).toBeDefined();
+
+    // A second identical run does not re-append the same recommendation.
+    await daily(makeDeps(github, store, { slack }), LATER, { post: false });
+    expect(await store.readAssignments()).toHaveLength(1);
+  });
+
   it("does not write a snapshot on a dry run", async () => {
     const pr = pullRequest({ number: 21, author: "author", files: simpleFiles() });
     const github = new MockGitHubAdapter({ openPullRequests: { [REPO]: [pr] } });
