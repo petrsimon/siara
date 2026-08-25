@@ -285,10 +285,18 @@ export class SqliteStore implements SiaraStore {
     }
 
     const content = readFileSync(this.assignmentsPath, "utf-8");
-    return content
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as Assignment);
+    const out: Assignment[] = [];
+    for (const line of content.split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        out.push(JSON.parse(line) as Assignment);
+      } catch {
+        // Skip a corrupt/partial line (e.g. from a crashed append) rather than
+        // failing the whole dashboard/log read.
+        console.warn(`readAssignments: skipping malformed line in ${this.assignmentsPath}`);
+      }
+    }
+    return out;
   }
 
   async close(): Promise<void> {

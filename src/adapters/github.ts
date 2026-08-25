@@ -2,7 +2,7 @@
  * GitHub adapter backed by the authenticated `gh` CLI.
  */
 import { execFile as execFileCb } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -13,8 +13,6 @@ const execFile = promisify(execFileCb);
 
 const JIRA_KEY_RE = /[A-Z]+-\d+/;
 const REVIEW_HISTORY_PR_CAP = 100;
-
-let tempBodyCounter = 0;
 
 export interface GhCliOptions {
   /** When true, log write commands instead of executing them. */
@@ -127,12 +125,14 @@ export function tallyCommitsByLogin(
   path: string,
   logins: string[],
 ): Record<string, Record<string, number>> {
-  const result: Record<string, Record<string, number>> = {};
+  // Object.create(null): keys are API-derived logins/paths, so a literal
+  // "__proto__" must not touch a real prototype.
+  const result: Record<string, Record<string, number>> = Object.create(null);
   for (const login of logins) {
     if (!login) {
       continue;
     }
-    const paths = result[login] ?? {};
+    const paths = result[login] ?? Object.create(null);
     paths[path] = (paths[path] ?? 0) + 1;
     result[login] = paths;
   }
@@ -144,7 +144,7 @@ function mergeCommitMaps(
   source: Record<string, Record<string, number>>,
 ): void {
   for (const [login, paths] of Object.entries(source)) {
-    const existing = target[login] ?? {};
+    const existing = target[login] ?? Object.create(null);
     for (const [path, count] of Object.entries(paths)) {
       existing[path] = (existing[path] ?? 0) + count;
     }
@@ -159,7 +159,7 @@ export function parseReviewHistory(
   sinceIso: string,
 ): Record<string, RecentReview[]> {
   const sinceMs = Date.parse(sinceIso);
-  const result: Record<string, RecentReview[]> = {};
+  const result: Record<string, RecentReview[]> = Object.create(null);
 
   for (const pull of pulls) {
     const prNumber = pull.number;
@@ -200,11 +200,16 @@ async function runGh(args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-function writeTempBody(body: string): string {
-  tempBodyCounter += 1;
-  const path = join(tmpdir(), `siara-pr-comment-${process.pid}-${tempBodyCounter}.txt`);
-  writeFileSync(path, body, "utf8");
-  return path;
+/**
+ * Write the comment body to a fresh private temp dir (0700 via mkdtemp) so the
+ * filename is unpredictable and never a pre-planted symlink. Returns both the
+ * file path and its dir for recursive cleanup.
+ */
+function writeTempBody(body: string): { dir: string; path: string } {
+  const dir = mkdtempSync(join(tmpdir(), "siara-"));
+  const path = join(dir, "body.txt");
+  writeFileSync(path, body, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  return { dir, path };
 }
 
 export class GhCliGitHubAdapter implements GitHubAdapter {
@@ -342,12 +347,12 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
       return;
     }
 
-    const bodyPath = writeTempBody(body);
+    const { dir, path: bodyPath } = writeTempBody(body);
     try {
       await runGh([...args, bodyPath]);
     } finally {
       try {
-        unlinkSync(bodyPath);
+        rmSync(dir, { recursive: true, force: true });
       } catch {
         // Best-effort cleanup.
       }

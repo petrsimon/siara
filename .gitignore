@@ -10,3 +10,11 @@ siara.db-*
 .env
 .env.*
 !.env.example
+
+# Team-specific config (roster, Jira IDs, emails) — operator-supplied, never committed
+siara.config.json
+
+# Generated dashboard (published via CI, not committed)
+dashboard.html
+public/
+.staticrypt.json
