@@ -6,22 +6,39 @@ import type {
   Assignment,
   CandidateHistory,
   JiraData,
+  OpenPrsSnapshot,
+  Override,
   PullRequest,
   RecentReview,
   ReviewHistoryPage,
 } from "../types.js";
 import { dirOf } from "../util/paths.js";
 import { appendAssignmentFile, readAssignmentsFile } from "./assignmentsLog.js";
+import {
+  appendOverrideFile,
+  overridesPathFor,
+  readOverridesFile,
+} from "./overridesLog.js";
+import {
+  readOpenPrsSnapshot,
+  snapshotPathFor,
+  writeOpenPrsSnapshot,
+} from "./snapshotLog.js";
 import type { SiaraStore, StoreOptions } from "./index.js";
 
 /** Cached signals + sync bookkeeping. Assignments are stored separately in JSONL. */
 export class SqliteStore implements SiaraStore {
   private readonly db: Database.Database;
   private readonly assignmentsPath: string;
+  private readonly overridesPath: string;
+  private readonly snapshotPath: string;
 
   constructor(opts: StoreOptions) {
     this.db = new Database(opts.dbPath);
     this.assignmentsPath = opts.assignmentsPath;
+    this.overridesPath =
+      opts.overridesPath ?? overridesPathFor(opts.assignmentsPath);
+    this.snapshotPath = snapshotPathFor(opts.assignmentsPath);
   }
 
   async init(): Promise<void> {
@@ -63,6 +80,12 @@ export class SqliteStore implements SiaraStore {
       CREATE TABLE IF NOT EXISTS open_load (
         login TEXT PRIMARY KEY,
         load INTEGER NOT NULL
+      );
+
+      -- busy_load: per-login "heads-down" weight (jira/manual) reducing review capacity.
+      CREATE TABLE IF NOT EXISTS busy_load (
+        login TEXT PRIMARY KEY,
+        busy REAL NOT NULL
       );
 
       -- jira_cache: ticket signals fetched from Jira.
@@ -174,6 +197,22 @@ export class SqliteStore implements SiaraStore {
     tx(loads);
   }
 
+  async upsertBusyLoad(busy: Record<string, number>): Promise<void> {
+    const upsert = this.db.prepare(`
+      INSERT INTO busy_load (login, busy)
+      VALUES (?, ?)
+      ON CONFLICT (login) DO UPDATE SET busy = excluded.busy
+    `);
+
+    const tx = this.db.transaction((data: Record<string, number>) => {
+      for (const [login, busyWeight] of Object.entries(data)) {
+        upsert.run(login, busyWeight);
+      }
+    });
+
+    tx(busy);
+  }
+
   async upsertJira(key: string, data: JiraData): Promise<void> {
     this.db
       .prepare(`
@@ -254,6 +293,9 @@ export class SqliteStore implements SiaraStore {
     const loadStmt = this.db.prepare(
       `SELECT load FROM open_load WHERE login = ?`,
     );
+    const busyStmt = this.db.prepare(
+      `SELECT busy FROM busy_load WHERE login = ?`,
+    );
 
     return logins.map((login) => {
       const commitRows = commitsStmt.all(repo, login) as Array<{
@@ -293,11 +335,15 @@ export class SqliteStore implements SiaraStore {
       const loadRow = loadStmt.get(login) as { load: number } | undefined;
       const openReviewLoad = loadRow?.load ?? 0;
 
+      const busyRow = busyStmt.get(login) as { busy: number } | undefined;
+      const jiraBusy = busyRow?.busy ?? 0;
+
       return {
         login,
         commitsByPath,
         repoReviewCount,
         openReviewLoad,
+        jiraBusy,
         recentReviews,
       };
     });
@@ -309,6 +355,22 @@ export class SqliteStore implements SiaraStore {
 
   async readAssignments(): Promise<Assignment[]> {
     return readAssignmentsFile(this.assignmentsPath);
+  }
+
+  async appendOverride(o: Override): Promise<void> {
+    appendOverrideFile(this.overridesPath, o);
+  }
+
+  async readOverrides(): Promise<Override[]> {
+    return readOverridesFile(this.overridesPath);
+  }
+
+  async writeOpenPrsSnapshot(snapshot: OpenPrsSnapshot): Promise<void> {
+    writeOpenPrsSnapshot(this.snapshotPath, snapshot);
+  }
+
+  async readOpenPrsSnapshot(): Promise<OpenPrsSnapshot | undefined> {
+    return readOpenPrsSnapshot(this.snapshotPath);
   }
 
   async close(): Promise<void> {

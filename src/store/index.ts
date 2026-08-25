@@ -14,6 +14,8 @@ import type {
   Assignment,
   CandidateHistory,
   JiraData,
+  OpenPrsSnapshot,
+  Override,
   PullRequest,
   ReviewHistoryPage,
 } from "../types.js";
@@ -40,6 +42,8 @@ export interface SiaraStore extends HistoryStore {
   getReviewWatermark(repo: string): Promise<number | undefined>;
   /** Current open review load per login. */
   upsertOpenLoad(loads: Record<string, number>): Promise<void>;
+  /** Per-login "heads-down" busy weight (jira/manual) — reduces review capacity. */
+  upsertBusyLoad(busy: Record<string, number>): Promise<void>;
   /** Cache Jira signals for a ticket. */
   upsertJira(key: string, data: JiraData): Promise<void>;
   getJira(key: string): Promise<JiraData | undefined>;
@@ -59,6 +63,16 @@ export interface SiaraStore extends HistoryStore {
   appendAssignment(a: Assignment): Promise<void>;
   readAssignments(): Promise<Assignment[]>;
 
+  // --- override log (JSONL) --------------------------------------------------
+  /** Record a manual reviewer change observed after auto-assignment. */
+  appendOverride(o: Override): Promise<void>;
+  readOverrides(): Promise<Override[]>;
+
+  // --- open-PRs snapshot (JSON, git-tracked, overwritten each run) ------------
+  /** Overwrite the point-in-time open-PRs snapshot. */
+  writeOpenPrsSnapshot(snapshot: OpenPrsSnapshot): Promise<void>;
+  readOpenPrsSnapshot(): Promise<OpenPrsSnapshot | undefined>;
+
   close(): Promise<void>;
 }
 
@@ -68,4 +82,7 @@ export interface StoreOptions {
   dbPath: string;
   /** Path to the append-only assignment log. */
   assignmentsPath: string;
+  /** Path to the append-only override log. Defaults to overrides.jsonl beside
+   *  the assignments log. */
+  overridesPath?: string;
 }

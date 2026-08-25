@@ -6,7 +6,7 @@
 import type { GitHubAdapter, JiraAdapter, SlackAdapter } from "../adapters/index.js";
 import type { SiaraRepoConfig, SiaraTeamConfig } from "../config.js";
 import type { SiaraStore } from "../store/index.js";
-import type { Assignment } from "../types.js";
+import type { Assignment, Override } from "../types.js";
 
 /** Everything a runtime entrypoint needs, injected for testability. */
 export interface SiaraDeps {
@@ -59,6 +59,8 @@ export interface DailyPrResult {
 export interface DailyResult {
   synced: SyncResult[];
   assigned: DailyPrResult[];
+  /** Manual reviewer changes detected this run (logged, never reverted). */
+  overrides: Override[];
 }
 
 // --- entrypoints (implemented in sibling files) ------------------------------

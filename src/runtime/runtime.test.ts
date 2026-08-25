@@ -10,6 +10,8 @@ import {
 import { DEFAULT_TEAM_CONFIG } from "../config.js";
 import { file, pullRequest, simpleFiles } from "../scoring/fixtures.js";
 import { openStore, type SqliteStore } from "../store/sqliteStore.js";
+import { overridesPathFor } from "../store/overridesLog.js";
+import { snapshotPathFor } from "../store/snapshotLog.js";
 import { daily } from "./daily.js";
 import { dryRun } from "./dryRun.js";
 import { formatRepostLine } from "./staleness.js";
@@ -206,8 +208,8 @@ describe("daily live", () => {
 
   afterEach(async () => {
     await store.close();
-    if (existsSync(assignmentsPath)) {
-      unlinkSync(assignmentsPath);
+    for (const p of [assignmentsPath, snapshotPathFor(assignmentsPath)]) {
+      if (existsSync(p)) unlinkSync(p);
     }
   });
 
@@ -252,6 +254,26 @@ describe("daily live", () => {
       assignees: entry?.assignees,
       band: entry?.band,
     });
+
+    // A point-in-time open-PRs snapshot is written for the dashboard.
+    const snapshot = await store.readOpenPrsSnapshot();
+    expect(snapshot?.takenAt).toBe(NOW);
+    expect(snapshot?.prs).toHaveLength(1);
+    expect(snapshot?.prs[0]).toMatchObject({
+      repo: REPO,
+      pr: 20,
+      assignees: entry?.assignees,
+      band: entry?.band,
+    });
+  });
+
+  it("does not write a snapshot on a dry run", async () => {
+    const pr = pullRequest({ number: 21, author: "author", files: simpleFiles() });
+    const github = new MockGitHubAdapter({ openPullRequests: { [REPO]: [pr] } });
+    const deps = makeDeps(github, store);
+
+    await dryRun(deps, NOW);
+    expect(await store.readOpenPrsSnapshot()).toBeUndefined();
   });
 });
 
@@ -267,8 +289,8 @@ describe("staleness repost", () => {
 
   afterEach(async () => {
     await store.close();
-    if (existsSync(assignmentsPath)) {
-      unlinkSync(assignmentsPath);
+    for (const p of [assignmentsPath, snapshotPathFor(assignmentsPath)]) {
+      if (existsSync(p)) unlinkSync(p);
     }
   });
 
@@ -308,5 +330,91 @@ describe("staleness repost", () => {
     expect(slack.reposts[0]?.text).toContain("🔴");
     expect(slack.reposts[0]?.text).toContain("10d overdue");
     expect(slack.reposts[0]?.text).toContain("@alice");
+  });
+});
+
+describe("manual override tracking", () => {
+  let store: SqliteStore;
+  let assignmentsPath: string;
+
+  beforeEach(async () => {
+    assignmentsPath = nextAssignmentsPath("override");
+    store = openStore({ dbPath: ":memory:", assignmentsPath });
+    await store.init();
+  });
+
+  afterEach(async () => {
+    await store.close();
+    for (const p of [
+      assignmentsPath,
+      overridesPathFor(assignmentsPath),
+      snapshotPathFor(assignmentsPath),
+    ]) {
+      if (existsSync(p)) unlinkSync(p);
+    }
+  });
+
+  it("detects, logs, and reports a reviewer change without reverting it", async () => {
+    // Run 1: assign a fresh PR.
+    const pr = pullRequest({ number: 40, author: "author", files: simpleFiles() });
+    const github = new MockGitHubAdapter({ openPullRequests: { [REPO]: [pr] } });
+    const deps = makeDeps(github, store);
+    const first = await daily(deps, NOW);
+    const suggested = first.assigned[0]?.assignees ?? [];
+    expect(suggested.length).toBeGreaterThan(0);
+    expect(first.overrides).toEqual([]);
+
+    // Run 2: the PR now carries a different, manually-set reviewer.
+    const manual = ["alice", "bob", "carol"].find((l) => !suggested.includes(l))!;
+    const changed = pullRequest({
+      number: 40,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: [manual],
+    });
+    const github2 = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [changed] },
+    });
+    const deps2 = makeDeps(github2, store);
+    const second = await daily(deps2, LATER);
+
+    // Respected (never re-requested) and logged exactly once.
+    expect(github2.reviewRequests).toEqual([]);
+    expect(second.overrides).toHaveLength(1);
+    expect(second.overrides[0]).toMatchObject({
+      repo: REPO,
+      pr: 40,
+      suggested: [...suggested].sort(),
+      actual: [manual],
+    });
+
+    const logged = await store.readOverrides();
+    expect(logged).toHaveLength(1);
+
+    // Run 3: same divergence — not re-logged.
+    const third = await daily(makeDeps(github2, store), LATER);
+    expect(third.overrides).toEqual([]);
+    expect(await store.readOverrides()).toHaveLength(1);
+  });
+
+  it("does not flag a PR whose reviewers match the suggestion", async () => {
+    const pr = pullRequest({ number: 41, author: "author", files: simpleFiles() });
+    const github = new MockGitHubAdapter({ openPullRequests: { [REPO]: [pr] } });
+    const first = await daily(makeDeps(github, store), NOW);
+    const suggested = first.assigned[0]?.assignees ?? [];
+
+    const kept = pullRequest({
+      number: 41,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: suggested,
+    });
+    const github2 = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [kept] },
+    });
+    const second = await daily(makeDeps(github2, store), LATER);
+
+    expect(second.overrides).toEqual([]);
+    expect(await store.readOverrides()).toEqual([]);
   });
 });
