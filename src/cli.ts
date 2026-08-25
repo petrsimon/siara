@@ -7,9 +7,11 @@ import { GhCliGitHubAdapter } from "./adapters/github.js";
 import { loadConfig } from "./config-loader.js";
 import { generateDashboard } from "./dashboard/index.js";
 import { daily, dryRun, sync } from "./runtime/index.js";
-import { openStore } from "./store/sqliteStore.js";
+import { readAssignmentsFile } from "./store/assignmentsLog.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+
+const ASSIGNMENTS_PATH = "./data/assignments.jsonl";
 
 const USAGE = `Siara — deterministic PR reviewer assigner
 
@@ -48,24 +50,29 @@ async function main(): Promise<void> {
   }
 
   const nowIso = new Date().toISOString();
+
+  // Dashboard only reads the git-tracked JSONL log — no config, adapters, or
+  // SQLite (avoids loading the better-sqlite3 native addon entirely).
+  if (command === "dashboard") {
+    const outPath = resolve(parseDashboardOut(process.argv));
+    const assignments = readAssignmentsFile(ASSIGNMENTS_PATH);
+    const html = generateDashboard({ assignments, generatedAtIso: nowIso });
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, html, "utf8");
+    console.log(`Dashboard written to ${outPath} (${assignments.length} assignment(s))`);
+    return;
+  }
+
+  // sync / daily / dry-run need the SQLite store — load it lazily so `dashboard`
+  // never pulls in the native addon.
+  const { openStore } = await import("./store/sqliteStore.js");
   const store = openStore({
     dbPath: process.env.SIARA_DB ?? "./siara.db",
-    assignmentsPath: "./data/assignments.jsonl",
+    assignmentsPath: ASSIGNMENTS_PATH,
   });
 
   try {
     await store.init();
-
-    // Dashboard only reads the assignment log — no config or adapters needed.
-    if (command === "dashboard") {
-      const outPath = resolve(parseDashboardOut(process.argv));
-      const assignments = await store.readAssignments();
-      const html = generateDashboard({ assignments, generatedAtIso: nowIso });
-      mkdirSync(dirname(outPath), { recursive: true });
-      writeFileSync(outPath, html, "utf8");
-      console.log(`Dashboard written to ${outPath} (${assignments.length} assignment(s))`);
-      return;
-    }
 
     const { teamConfig, repoConfigs, repos } = loadConfig();
     const github = new GhCliGitHubAdapter({ dryLog: command === "dry-run" });

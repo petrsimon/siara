@@ -2,15 +2,9 @@
  * SQLite-backed SiaraStore. Caches GitHub/Jira sync signals; assignments live in JSONL.
  */
 import Database from "better-sqlite3";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-} from "node:fs";
-import { dirname } from "node:path";
 import type { Assignment, CandidateHistory, JiraData, PullRequest, RecentReview } from "../types.js";
 import { dirOf } from "../util/paths.js";
+import { appendAssignmentFile, readAssignmentsFile } from "./assignmentsLog.js";
 import type { SiaraStore, StoreOptions } from "./index.js";
 
 /** Cached signals + sync bookkeeping. Assignments are stored separately in JSONL. */
@@ -272,31 +266,11 @@ export class SqliteStore implements SiaraStore {
   }
 
   async appendAssignment(a: Assignment): Promise<void> {
-    const parent = dirname(this.assignmentsPath);
-    if (!existsSync(parent)) {
-      mkdirSync(parent, { recursive: true });
-    }
-    appendFileSync(this.assignmentsPath, `${JSON.stringify(a)}\n`);
+    appendAssignmentFile(this.assignmentsPath, a);
   }
 
   async readAssignments(): Promise<Assignment[]> {
-    if (!existsSync(this.assignmentsPath)) {
-      return [];
-    }
-
-    const content = readFileSync(this.assignmentsPath, "utf-8");
-    const out: Assignment[] = [];
-    for (const line of content.split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        out.push(JSON.parse(line) as Assignment);
-      } catch {
-        // Skip a corrupt/partial line (e.g. from a crashed append) rather than
-        // failing the whole dashboard/log read.
-        console.warn(`readAssignments: skipping malformed line in ${this.assignmentsPath}`);
-      }
-    }
-    return out;
+    return readAssignmentsFile(this.assignmentsPath);
   }
 
   async close(): Promise<void> {
