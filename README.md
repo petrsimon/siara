@@ -73,6 +73,28 @@ Scoring layer (difficulty, familiarity, knowledge, follow-up affinity,
 files-at-risk, soft boosts) and orchestrator are the current focus. Sync,
 adapters, dashboard, and dry-run mode follow.
 
+## Usage
+
+```sh
+npm install
+npm run build
+
+# configure: copy the example and edit roster + repos
+cp siara.config.example.json siara.config.json
+
+node dist/cli.js sync        # fetch GitHub/Jira signals into ./siara.db
+node dist/cli.js dry-run     # score pending PRs, no side effects (start here)
+node dist/cli.js daily       # assign + comment + request review + log
+node dist/cli.js dashboard   # write ./dashboard.html from the assignment log
+```
+
+The GitHub adapter shells out to the authenticated [`gh` CLI](https://cli.github.com/)
+— no tokens to configure, no extra dependencies. **Start with `dry-run`** to tune
+config and build trust before going live.
+
+Environment: `SIARA_CONFIG` (default `./siara.config.json`), `SIARA_DB`
+(default `./siara.db`).
+
 ## Development
 
 ```sh
@@ -81,7 +103,9 @@ npm run typecheck
 npm test
 ```
 
-Scorers are pure functions with fixture-based unit tests — no network in tests.
+Scorers, orchestrator, store, runtime, and dashboard are covered by fixture-based
+unit tests — no network in tests (the `gh` adapter's pure parsers are tested
+against fixture JSON).
 
 ## License
 
