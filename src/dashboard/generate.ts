@@ -210,6 +210,26 @@ ${STYLES}
         });
       })(inp);
     }
+    // Reviewer name → jump to the Open PRs tab, pre-filtered to that reviewer.
+    for (var link of document.querySelectorAll("[data-filter-login]")) {
+      (function (el) {
+        el.addEventListener("click", function () {
+          var login = el.getAttribute("data-filter-login");
+          for (var t of document.querySelectorAll(".tab")) {
+            t.classList.toggle("active", t.getAttribute("data-tab") === "open-prs");
+          }
+          for (var p of document.querySelectorAll(".tab-panel")) {
+            p.classList.toggle("hidden", p.id !== "tab-open-prs");
+          }
+          var search = document.querySelector('.table-search[data-target="open-prs-table"]');
+          if (search) {
+            search.value = login;
+            search.dispatchEvent(new Event("input"));
+            search.scrollIntoView({ block: "nearest" });
+          }
+        });
+      })(link);
+    }
 </script>
 </body>
 </html>`;
@@ -247,7 +267,7 @@ function renderPerPersonChart(metrics: DashboardMetrics): string {
         x += w;
         return rect;
       }).join("");
-      const label = `<text x="${labelW - 10}" y="${y + barH / 2}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(login)}</text>`;
+      const label = `<text x="${labelW - 10}" y="${y + barH / 2}" class="svg-label svg-link" data-filter-login="${escapeHtml(login)}" text-anchor="end" dominant-baseline="central">${escapeHtml(login)}</text>`;
       const count = `<text x="${x + 6}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central">${total}</text>`;
       return label + segs + count;
     })
@@ -592,7 +612,7 @@ function renderRosterSection(metrics: DashboardMetrics): string {
       const b = metrics.bandByPerson[login] ?? { simple: 0, moderate: 0, hard: 0 };
       return `
         <tr>
-          <td class="login">${escapeHtml(login)}</td>
+          <td class="login"><span class="reviewer-link" data-filter-login="${escapeHtml(login)}">${escapeHtml(login)}</span></td>
           <td class="count">${total}</td>
           <td class="count">${b.simple}</td>
           <td class="count">${b.moderate}</td>
@@ -965,6 +985,10 @@ const STYLES = `
     .svg-label { fill: var(--text); font-size: 12px; }
     .svg-count { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     .svg-tick { fill: var(--muted); font-size: 10px; }
+    .svg-link { cursor: pointer; }
+    .svg-link:hover { fill: var(--accent); text-decoration: underline; }
+    .reviewer-link { color: var(--accent); cursor: pointer; }
+    .reviewer-link:hover { text-decoration: underline; }
     .flame-label { fill: #fff; font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none; }
     .heat-num { font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; }
 

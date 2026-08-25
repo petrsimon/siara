@@ -331,6 +331,22 @@ describe("generateDashboard", () => {
     expect(html).toContain('id="tab-overview"');
   });
 
+  it("makes reviewer names link to the Open PRs tab filtered by that reviewer", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
+        assignment({ assignees: ["bob"], band: "simple", pr: 2 }),
+      ],
+      generatedAtIso,
+    });
+    // Reviewer name carries a filter hook (both roster row and chart label).
+    expect(html).toContain('data-filter-login="alice"');
+    expect(html).toContain('class="reviewer-link"');
+    // Click wiring: switch to the open-prs tab and seed its search box.
+    expect(html).toContain("[data-filter-login]");
+    expect(html).toContain('.table-search[data-target="open-prs-table"]');
+  });
+
   it("renders a reviewer roster list with per-band counts", () => {
     const html = generateDashboard({
       assignments: [
