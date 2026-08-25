@@ -6,6 +6,8 @@
  * Implementation lives in ./generate.ts. This file is the LOCKED contract.
  */
 import type { Assignment, DifficultyBand } from "../types.js";
+import { renderDashboardHtml } from "./generate.js";
+import { buildMetrics } from "./metrics.js";
 
 export interface DashboardInput {
   assignments: Assignment[];
@@ -28,10 +30,10 @@ export interface DashboardMetrics {
 
 /** Compute metrics from the assignment log. Pure. */
 export function computeMetrics(assignments: Assignment[]): DashboardMetrics {
-  throw new Error("not implemented");
+  return buildMetrics(assignments);
 }
 
 /** Render the full static dashboard HTML. Pure. */
 export function generateDashboard(input: DashboardInput): string {
-  throw new Error("not implemented");
+  return renderDashboardHtml(input);
 }
