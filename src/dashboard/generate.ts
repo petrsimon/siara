@@ -777,9 +777,15 @@ function renderOpenPrsSection(snapshot: DashboardInput["openPrs"]): string {
         : "—";
       const bandVal = pr.band ? bandRank[pr.band] : -1;
       const assignees = escapeHtml(pr.assignees.join(", ") || "—");
+      const slash = pr.repo.indexOf("/");
+      const org = slash >= 0 ? pr.repo.slice(0, slash) : "";
+      const name = slash >= 0 ? pr.repo.slice(slash + 1) : pr.repo;
       return `
         <tr>
-          <td class="login">${escapeHtml(pr.repo)}#${pr.pr}</td>
+          <td class="pr-cell">
+            <span class="pr-main">${escapeHtml(name)}#${pr.pr}</span>
+            ${org ? `<span class="pr-org">${escapeHtml(org)}</span>` : ""}
+          </td>
           <td>${escapeHtml(pr.title)}</td>
           <td data-val="${bandVal}">${band}</td>
           <td>${assignees}</td>
@@ -896,6 +902,8 @@ const STYLES = `
     }
 
     * { box-sizing: border-box; }
+
+    html { font-size: 14px; }
 
     body {
       margin: 0;
@@ -1041,6 +1049,9 @@ const STYLES = `
     }
     tr:last-child td { border-bottom: none; }
     .login { font-weight: 500; min-width: 8rem; }
+    .pr-cell { min-width: 9rem; line-height: 1.25; }
+    .pr-main { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .pr-org { display: block; font-size: 0.72rem; color: var(--muted); }
     .count { width: 5rem; font-variant-numeric: tabular-nums; color: var(--muted); }
 
     footer { margin-top: 2rem; font-size: 0.82rem; color: var(--muted); text-align: center; }`;
