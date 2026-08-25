@@ -142,6 +142,7 @@ export function pickReviewers(input: PickInput): PickResult {
       band: difficulty.band,
       openReviewLoad: c.openReviewLoad,
       jiraBusy: c.jiraBusy,
+      hardReviewLoad: c.hardReviewLoad,
       team: config,
     });
     const cappedSoft = Math.min(
@@ -157,6 +158,13 @@ export function pickReviewers(input: PickInput): PickResult {
         parts.push("manager");
       }
       if (c.jiraBusy > 0) parts.push("busy");
+      if (
+        difficulty.band === "hard" &&
+        config.availability.hardWipLimit > 0 &&
+        (c.hardReviewLoad ?? 0) >= config.availability.hardWipLimit
+      ) {
+        parts.push("hard-WIP");
+      }
       if (c.openReviewLoad > 0) parts.push("load");
       notes.push(`availability −${penalty.toFixed(2)} (${parts.join("+") || "load"})`);
     }

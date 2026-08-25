@@ -60,6 +60,12 @@ export interface CandidateHistory {
   reviewsByPath?: Record<string, number>;
   /** Current count of open review assignments (load signal). */
   openReviewLoad: number;
+  /**
+   * Concurrent hard-band reviews this person currently holds, per Siara's own
+   * assignment log (open PRs it scored hard). Drives the hard-WIP overflow cap.
+   * Optional — absent ⇒ treated as 0. Live GitHub load can't carry Siara's band.
+   */
+  hardReviewLoad?: number;
   /** Jira/manual "heads-down" weight — how busy this person is on their own work. */
   jiraBusy: number;
   /**

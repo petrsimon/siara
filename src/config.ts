@@ -153,6 +153,16 @@ export interface SiaraTeamConfig {
     /** How much availability matters per band (simple ≈ education, ignore busy). */
     bandWeight: { simple: number; moderate: number; hard: number };
     /**
+     * Hard-PR WIP limit: max concurrent hard reviews a person may hold before an
+     * extra penalty kicks in, so overflow spills to the next-best expert instead
+     * of bombarding one (WhoDo/Sofia-style workload balancing). 0 disables it.
+     * The penalty stays inside the soft-cap, so it re-orders *among comparable
+     * experts* — it never dumps a hard PR onto a zero-knowledge stranger.
+     */
+    hardWipLimit: number;
+    /** Penalty per hard review held over `hardWipLimit` (folded into the soft, capped penalty). */
+    hardWipPenalty: number;
+    /**
      * Ceiling on the penalty as a fraction of the candidate's primary score, so
      * availability stays SOFT: a strong expert always keeps at least
      * (1 - maxPenaltyFraction) of their score and can never be flipped below a
@@ -296,12 +306,20 @@ export const DEFAULT_TEAM_CONFIG: Omit<SiaraTeamConfig, "roster"> = {
   reviewerBusy: {},
   reviewers: {},
   availability: {
-    loadWeight: 0.03,
+    // Load bites harder now: fairness comes from spreading low-risk PRs by load,
+    // not just from familiarity. simple/moderate bandWeights raised so the load
+    // term actually re-orders simple PRs (the bulk) away from the single most
+    // familiar person instead of letting them sweep the repo.
+    loadWeight: 0.12,
     busyWeight: 0.15,
     managerModeratePenalty: 0.25,
     managerHardPenalty: 0.6,
     unavailablePenalty: 5,
-    bandWeight: { simple: 0.2, moderate: 0.6, hard: 1.0 },
+    bandWeight: { simple: 0.6, moderate: 0.7, hard: 1.0 },
+    // Hard PRs still route to expertise; the WIP cap keeps one expert from being
+    // bombarded — the 4th+ concurrent hard review overflows to the next expert.
+    hardWipLimit: 3,
+    hardWipPenalty: 0.5,
     maxPenaltyFraction: 0.9,
   },
   staleness: {

@@ -9,6 +9,8 @@ const AVAIL: SiaraTeamConfig["availability"] = {
   managerHardPenalty: 0.6,
   unavailablePenalty: 5,
   bandWeight: { simple: 0.2, moderate: 0.6, hard: 1.0 },
+  hardWipLimit: 3,
+  hardWipPenalty: 0.5,
   maxPenaltyFraction: 0.9,
 };
 
@@ -85,6 +87,38 @@ describe("availabilityPenalty", () => {
     });
     // raw = 0.03*5 + 0.15*2 + 0.6 = 0.15 + 0.30 + 0.6 = 1.05; band 1.0x
     expect(p).toBeCloseTo(1.05);
+  });
+
+  it("adds no hard-WIP penalty at or below the limit", () => {
+    const base = { login: "dev", openReviewLoad: 0, jiraBusy: 0, team: team([]) };
+    // hardReviewLoad 0..2 (limit 3) → no overflow yet.
+    expect(availabilityPenalty({ ...base, band: "hard", hardReviewLoad: 2 })).toBe(0);
+  });
+
+  it("adds an escalating hard-WIP penalty past the limit, on hard only", () => {
+    const base = { login: "dev", openReviewLoad: 0, jiraBusy: 0, team: team([]) };
+    // limit 3: holding 3 → over 1 → 0.5; holding 4 → over 2 → 1.0. band hard = 1.0x.
+    const at3 = availabilityPenalty({ ...base, band: "hard", hardReviewLoad: 3 });
+    const at4 = availabilityPenalty({ ...base, band: "hard", hardReviewLoad: 4 });
+    expect(at3).toBeCloseTo(0.5);
+    expect(at4).toBeCloseTo(1.0);
+    expect(at4).toBeGreaterThan(at3);
+    // Never on simple/moderate — hard PRs are the only ones protected.
+    expect(availabilityPenalty({ ...base, band: "simple", hardReviewLoad: 9 })).toBe(0);
+    expect(availabilityPenalty({ ...base, band: "moderate", hardReviewLoad: 9 })).toBeCloseTo(0);
+  });
+
+  it("disables the hard-WIP penalty when hardWipLimit is 0", () => {
+    const off: SiaraTeamConfig["availability"] = { ...AVAIL, hardWipLimit: 0 };
+    const p = availabilityPenalty({
+      login: "dev",
+      band: "hard",
+      openReviewLoad: 0,
+      jiraBusy: 0,
+      hardReviewLoad: 9,
+      team: { managers: [], availability: off },
+    });
+    expect(p).toBe(0);
   });
 
   it("clamps negative load/busy to zero", () => {

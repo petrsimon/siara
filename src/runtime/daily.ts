@@ -235,6 +235,27 @@ export async function daily(
     for (const r of logins) shadowLoad.set(r, (shadowLoad.get(r) ?? 0) + 1);
   };
 
+  // Hard-WIP tracking (both modes): how many concurrent HARD reviews each person
+  // already holds. Seed from still-open hard PRs — live from their requested
+  // reviewers, shadow from Siara's standing suggestion — then increment as new
+  // hard PRs are distributed this batch. Feeds the hard-WIP overflow cap so one
+  // expert isn't bombarded with hard reviews.
+  const hardLoad = new Map<string, number>();
+  for (const [repo, prs] of openPrsByRepo) {
+    for (const pr of prs) {
+      const key = prKey(repo, pr.number);
+      if (bands.get(key) !== "hard") continue;
+      const who =
+        pr.requestedReviewers.length > 0
+          ? pr.requestedReviewers
+          : suggestions.get(key) ?? [];
+      for (const r of who) hardLoad.set(r, (hardLoad.get(r) ?? 0) + 1);
+    }
+  }
+  const bumpHardLoad = (logins: string[]): void => {
+    for (const r of logins) hardLoad.set(r, (hardLoad.get(r) ?? 0) + 1);
+  };
+
   for (const repo of deps.repos) {
     const resolved = findRepoConfig(deps, repo);
     const openPrs = openPrsByRepo.get(repo) ?? [];
@@ -304,12 +325,15 @@ export async function daily(
       const rawCandidates = await deps.store.getCandidateHistory(repo, pr, logins);
       // In shadow mode fold the synthetic distribution load into openReviewLoad
       // so each pick steers away from reviewers already loaded up this batch.
-      const candidates = doPost
-        ? rawCandidates
-        : rawCandidates.map((c) => ({
-            ...c,
-            openReviewLoad: c.openReviewLoad + (shadowLoad.get(c.login) ?? 0),
-          }));
+      const candidates = rawCandidates.map((c) => ({
+        ...c,
+        // Shadow folds the synthetic batch load into openReviewLoad; live uses
+        // GitHub's load as-is. Both get Siara's hard-band load for the WIP cap.
+        openReviewLoad: doPost
+          ? c.openReviewLoad
+          : c.openReviewLoad + (shadowLoad.get(c.login) ?? 0),
+        hardReviewLoad: hardLoad.get(c.login) ?? 0,
+      }));
       const jira = pr.jiraKey
         ? await deps.store.getJira(pr.jiraKey)
         : undefined;
@@ -322,6 +346,11 @@ export async function daily(
       });
       if (!doPost && result.assignees.length > 0) {
         bumpShadowLoad(result.assignees);
+      }
+      // Hard-WIP load accrues in both modes so later hard PRs in the batch see
+      // this pick and overflow past the cap to the next expert.
+      if (result.difficulty.band === "hard" && result.assignees.length > 0) {
+        bumpHardLoad(result.assignees);
       }
 
       const rationaleInput = {

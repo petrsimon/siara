@@ -5,7 +5,8 @@
  *
  *   - open review load (already-assigned reviews),
  *   - jira/manual "heads-down" busy weight,
- *   - manager role (managers shouldn't carry moderate/hard reviews).
+ *   - manager role (managers shouldn't carry moderate/hard reviews),
+ *   - hard-WIP overflow (concurrent hard reviews past a per-person cap).
  *
  * Scaled by band: it barely matters for simple education-track PRs and dominates
  * for hard ones. Never an exclusion — a manager who is the sole expert still
@@ -57,18 +58,33 @@ export function availabilityPenalty(params: {
   band: DifficultyBand;
   openReviewLoad: number;
   jiraBusy: number;
+  /**
+   * Concurrent hard-band reviews this person already holds (Siara's own view).
+   * Drives the hard-WIP overflow penalty; only relevant on hard PRs. Default 0.
+   */
+  hardReviewLoad?: number;
   /** PTO / don't-assign — adds a flat, band-independent strong-soft penalty. */
   unavailable?: boolean;
   team: Pick<SiaraTeamConfig, "managers" | "availability">;
 }): number {
-  const { login, band, openReviewLoad, jiraBusy, unavailable, team } = params;
+  const { login, band, openReviewLoad, jiraBusy, hardReviewLoad, unavailable, team } = params;
   const cfg = team.availability;
   const bandWeight = cfg.bandWeight[band];
   const isManager = team.managers.includes(login);
 
+  // Hard-WIP overflow: only on hard PRs, only past the limit. Escalates per
+  // review held over the cap so a deeply-loaded expert overflows before a lightly
+  // loaded one. Folded into `raw`, so it rides the soft cap in pickReviewers —
+  // it re-orders comparable experts, never dumps hard work on a stranger.
+  const overWip =
+    band === "hard" && cfg.hardWipLimit > 0
+      ? Math.max(0, Math.max(0, hardReviewLoad ?? 0) - cfg.hardWipLimit + 1)
+      : 0;
+
   const raw =
     cfg.loadWeight * Math.max(0, openReviewLoad) +
     cfg.busyWeight * Math.max(0, jiraBusy) +
+    cfg.hardWipPenalty * overWip +
     managerPenalty(isManager, band, cfg);
 
   // Load/busy/manager scale by band; PTO does not — it should bite even on a
