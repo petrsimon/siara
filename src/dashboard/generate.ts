@@ -735,7 +735,7 @@ function renderOpenPrsSection(
       return `
         <tr data-logins="${escapeHtml(pr.assignees.join(" "))}">
           <td class="pr-cell">
-            <span class="pr-main">${escapeHtml(name)}#${pr.pr}</span>
+            <a class="pr-main" href="https://github.com/${escapeHtml(pr.repo)}/pull/${pr.pr}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}/${pr.pr}</a>
             ${org ? `<span class="pr-org">${escapeHtml(org)}</span>` : ""}
           </td>
           <td>${escapeHtml(pr.title)}</td>
@@ -1106,6 +1106,8 @@ const STYLES = `
     .login { font-weight: 500; min-width: 8rem; }
     .pr-cell { min-width: 9rem; line-height: 1.25; }
     .pr-main { font-weight: 600; font-variant-numeric: tabular-nums; }
+    a.pr-main { color: var(--accent); text-decoration: none; }
+    a.pr-main:hover { text-decoration: underline; }
     .pr-org { display: block; font-size: 0.72rem; color: var(--muted); }
     .count { width: 5rem; font-variant-numeric: tabular-nums; color: var(--muted); }
 

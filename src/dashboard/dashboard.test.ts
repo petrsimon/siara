@@ -449,6 +449,9 @@ describe("generateDashboard", () => {
     expect(html).toContain("Add auth guard");
     expect(html).toContain("6d");
     expect(html).toContain("overdue");
+    // PR cell is a link to the GitHub PR, shown as repo/number (not repo#number).
+    expect(html).toContain('href="https://github.com/org/repo/pull/7"');
+    expect(html).toContain(">repo/7</a>");
     expect(html).toContain("Waiting on reviewers");
     expect(html).toContain("Oldest");
     // Open-PRs table is sortable and searchable.
