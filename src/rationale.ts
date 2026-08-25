@@ -5,9 +5,16 @@
 import type { Assignment, DifficultyResult, ScoredCandidate } from "./types.js";
 import type { PickResult } from "./scoring/pickReviewers.js";
 
-/** Advisory note attached to simple-band picks (risk ≠ size caveat from plan). */
+/** Advisory for a genuinely simple PR with no path-risk signal (residual caveat). */
 const SIMPLE_ADVISORY =
-  "advisory: 'simple' is by diff size only — verify this isn't a small high-risk change (auth/crypto/migration)";
+  "advisory: 'simple' is by diff size only — verify this isn't a small high-risk change no path-risk rule caught";
+
+/** Summarize matched path-risk labels, e.g. "auth, migration". */
+function riskLabels(d: DifficultyResult): string {
+  const labels = new Set<string>();
+  for (const m of d.pathRisk.matched) labels.add(m.label ?? "risky path");
+  return [...labels].join(", ");
+}
 
 export interface RationaleInput {
   repo: string;
@@ -34,7 +41,20 @@ export function formatRationale(input: RationaleInput): string {
   const lines: string[] = [];
   lines.push(`Assigned ${who} to review PR #${prNumber} (${repo}):`);
   lines.push(`  ${difficultyLine(difficulty)}`);
-  if (difficulty.band === "simple") lines.push(`  ${SIMPLE_ADVISORY}`);
+  if (difficulty.pathRisk.matched.length > 0) {
+    const labels = riskLabels(difficulty);
+    if (difficulty.pathRisk.bandFloored) {
+      lines.push(
+        `  Path-risk: touches ${labels} — band raised from '${difficulty.pathRisk.sizeBand}' to '${difficulty.band}' (routed by knowledge, not education)`,
+      );
+    } else {
+      lines.push(
+        `  Path-risk: touches ${labels} — churn weighted up to ${difficulty.pathRisk.maxMultiplier}×`,
+      );
+    }
+  } else if (difficulty.band === "simple") {
+    lines.push(`  ${SIMPLE_ADVISORY}`);
+  }
   if (atRiskCount > 0) {
     lines.push(`  Files-at-risk: ${atRiskCount} bus-factor-1 file(s) — spread boost applied to non-owners`);
   }

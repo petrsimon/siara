@@ -52,7 +52,7 @@ describe("pickReviewers", () => {
   });
 
   describe("band routing", () => {
-    const path = "src/auth/login.ts";
+    const path = "src/ui/button.tsx";
 
     it("on a simple diff ranks lowest-familiarity candidate first (education)", () => {
       const result = pickReviewers(
@@ -86,6 +86,22 @@ describe("pickReviewers", () => {
         }),
       );
 
+      expect(result.difficulty.band).toBe("moderate");
+      expect(result.ranked[0]?.login).toBe("bob");
+    });
+
+    it("does not route a small auth diff through the education path", () => {
+      const authPath = "src/auth/login.ts";
+      const result = pickReviewers(
+        pickInput({
+          pr: { files: [file(authPath, 3, 1)] },
+          candidates: noviceAndExpert(authPath),
+        }),
+      );
+
+      // Size says simple; path-risk floors to moderate so knowledge counts and
+      // the novice isn't handed a dangerous change alone.
+      expect(result.difficulty.pathRisk.bandFloored).toBe(true);
       expect(result.difficulty.band).toBe("moderate");
       expect(result.ranked[0]?.login).toBe("bob");
     });

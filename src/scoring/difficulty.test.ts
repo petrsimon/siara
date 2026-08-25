@@ -8,8 +8,8 @@ describe("scoreDifficulty", () => {
   it("returns simple band for small churn, few files, one directory", () => {
     const result = scoreDifficulty(
       [
-        file("src/auth/login.ts", 5, 3),
-        file("src/auth/session.ts", 4, 2),
+        file("src/ui/button.tsx", 5, 3),
+        file("src/ui/list.tsx", 4, 2),
       ],
       config,
     );
@@ -94,8 +94,39 @@ describe("scoreDifficulty", () => {
     expect(result.band).toBe("simple");
     expect(result.raw).toEqual({
       totalChurn: 0,
+      baseChurn: 0,
       filesChanged: 0,
       directoriesTouched: 0,
+    });
+    expect(result.pathRisk.matched).toEqual([]);
+  });
+
+  describe("path-risk weighting", () => {
+    it("weights per-file churn up for high-risk paths (risk ≠ size)", () => {
+      const neutral = scoreDifficulty([file("src/ui/x.tsx", 20, 0)], config);
+      const risky = scoreDifficulty([file("src/auth/x.ts", 20, 0)], config);
+
+      // auth rule multiplier 2.5 → risk-weighted churn dominates the base.
+      expect(risky.raw.baseChurn).toBe(neutral.raw.baseChurn);
+      expect(risky.raw.totalChurn).toBeGreaterThan(neutral.raw.totalChurn);
+      expect(risky.pathRisk.maxMultiplier).toBe(2.5);
+      expect(risky.pathRisk.matched[0]?.label).toBe("auth");
+    });
+
+    it("floors a small auth diff up from simple to moderate (no education-to-stranger)", () => {
+      const result = scoreDifficulty([file("src/auth/login.ts", 3, 1)], config);
+
+      expect(result.pathRisk.sizeBand).toBe("simple");
+      expect(result.band).toBe("moderate");
+      expect(result.pathRisk.bandFloored).toBe(true);
+    });
+
+    it("does not floor risk-neutral simple diffs", () => {
+      const result = scoreDifficulty([file("src/ui/button.tsx", 3, 1)], config);
+
+      expect(result.band).toBe("simple");
+      expect(result.pathRisk.bandFloored).toBe(false);
+      expect(result.pathRisk.matched).toEqual([]);
     });
   });
 });

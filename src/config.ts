@@ -4,6 +4,22 @@
  * Team-level defaults with per-repo overrides. All tunable weights live here so
  * they can change without touching scorer code.
  */
+import type { DifficultyBand } from "./types.js";
+
+/**
+ * One path-risk rule: files whose path matches `pattern` (glob, see matchGlob)
+ * have their per-file churn multiplied by `multiplier` before aggregation, so a
+ * tiny change to high-risk code (auth/crypto/migrations) scores harder than its
+ * size alone. First matching rule in the list wins per file.
+ */
+export interface PathRiskRule {
+  /** Glob against the repo-relative path, e.g. "** /auth/**", "*.sql". */
+  pattern: string;
+  /** Churn multiplier applied to matching files (>= 1). */
+  multiplier: number;
+  /** Short label surfaced in the rationale, e.g. "auth", "migration". */
+  label?: string;
+}
 
 export interface SiaraTeamConfig {
   /** GitHub logins on the team. */
@@ -42,6 +58,22 @@ export interface SiaraTeamConfig {
     /** If reviewersPerPr >= 2, pair a learner with an expert. */
     pairWithExpert: boolean;
   };
+  /**
+   * Path-risk weighting: makes "difficulty" account for risk, not just size, so
+   * the education path never routes a small-but-dangerous diff to a stranger.
+   */
+  pathRisk: {
+    /** Per-file churn multipliers by path glob (first match wins). */
+    rules: PathRiskRule[];
+    /**
+     * If any changed file matches a rule with multiplier >= this, the PR's band
+     * is floored at `bandFloor` (a "simple"-by-size auth diff becomes moderate,
+     * so knowledge — not just low familiarity — drives routing).
+     */
+    bandFloorMultiplier: number;
+    /** Minimum band when a high-risk path is touched. */
+    bandFloor: DifficultyBand;
+  };
   soft: {
     estimateExpertBoost: number;
     priorityExpertBoost: number;
@@ -61,6 +93,7 @@ export interface SiaraRepoConfig {
   reviewersPerPr?: number;
   difficulty?: Partial<SiaraTeamConfig["difficulty"]>;
   filesAtRisk?: Partial<SiaraTeamConfig["filesAtRisk"]>;
+  pathRisk?: Partial<SiaraTeamConfig["pathRisk"]>;
   soft?: Partial<SiaraTeamConfig["soft"]>;
 }
 
@@ -95,6 +128,26 @@ export const DEFAULT_TEAM_CONFIG: Omit<SiaraTeamConfig, "roster"> = {
     spreadBoost: 0.15,
     pairWithExpert: true,
   },
+  pathRisk: {
+    // Security/data-sensitive paths weigh heavier than their diff size implies.
+    rules: [
+      { pattern: "**/auth/**", multiplier: 2.5, label: "auth" },
+      { pattern: "**/*auth*", multiplier: 2, label: "auth" },
+      { pattern: "**/*crypto*/**", multiplier: 2.5, label: "crypto" },
+      { pattern: "**/*crypto*", multiplier: 2.5, label: "crypto" },
+      { pattern: "**/security/**", multiplier: 2.5, label: "security" },
+      { pattern: "**/migrations/**", multiplier: 2, label: "migration" },
+      { pattern: "**/*.sql", multiplier: 2, label: "sql/schema" },
+      { pattern: "**/*secret*", multiplier: 3, label: "secrets" },
+      { pattern: "**/.env*", multiplier: 3, label: "env/secrets" },
+      { pattern: "**/*.env*", multiplier: 3, label: "env/secrets" },
+      { pattern: "**/*.tf", multiplier: 2, label: "infra" },
+      { pattern: "**/Dockerfile*", multiplier: 1.5, label: "container" },
+      { pattern: "**/*.pem", multiplier: 3, label: "keys/certs" },
+    ],
+    bandFloorMultiplier: 2,
+    bandFloor: "moderate",
+  },
   soft: {
     estimateExpertBoost: 0.1,
     priorityExpertBoost: 0.1,
@@ -123,6 +176,7 @@ export function resolveConfig(
     reviewersPerPr: repo.reviewersPerPr ?? team.reviewersPerPr,
     difficulty: { ...team.difficulty, ...repo.difficulty },
     filesAtRisk: { ...team.filesAtRisk, ...repo.filesAtRisk },
+    pathRisk: { ...team.pathRisk, ...repo.pathRisk },
     soft: { ...team.soft, ...repo.soft },
     repo: repo.repo,
     blocklist: repo.blocklist ?? [],

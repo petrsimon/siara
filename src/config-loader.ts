@@ -32,6 +32,33 @@ export interface LoadedConfig {
   repos: string[];
 }
 
+/** "owner/name", each side [A-Za-z0-9_.-]. Blocks path/query injection into gh api URLs. */
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/** A GitHub login (optionally "[bot]"). Blocks "-"-leading arg confusion in gh. */
+const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\[bot\])?$/;
+
+/**
+ * Reject repo slugs / logins that could inject into `gh api` endpoint strings or
+ * be misread by `gh` as flags. Values come from operator config, so this is
+ * defense-in-depth on the trust boundary, not the only guard.
+ */
+function validateNames(teamConfig: SiaraTeamConfig, repoConfigs: SiaraRepoConfig[]): void {
+  const logins = [
+    ...teamConfig.roster,
+    ...repoConfigs.flatMap((r) => r.blocklist ?? []),
+  ];
+  for (const login of logins) {
+    if (!LOGIN_RE.test(login)) {
+      throw new Error(`Siara config: invalid GitHub login "${login}" (expected a GitHub username)`);
+    }
+  }
+  for (const r of repoConfigs) {
+    if (!REPO_RE.test(r.repo)) {
+      throw new Error(`Siara config: invalid repo "${r.repo}" (expected "owner/name")`);
+    }
+  }
+}
+
 function mergeTeamConfig(
   partial: Partial<SiaraTeamConfig> & { roster: string[] },
 ): SiaraTeamConfig {
@@ -66,6 +93,12 @@ function mergeTeamConfig(
     filesAtRisk: {
       ...DEFAULT_TEAM_CONFIG.filesAtRisk,
       ...partial.filesAtRisk,
+    },
+    pathRisk: {
+      ...DEFAULT_TEAM_CONFIG.pathRisk,
+      ...partial.pathRisk,
+      // Keep default rules unless the operator explicitly supplies their own.
+      rules: partial.pathRisk?.rules ?? DEFAULT_TEAM_CONFIG.pathRisk.rules,
     },
     soft: {
       ...DEFAULT_TEAM_CONFIG.soft,
@@ -107,6 +140,7 @@ export function loadConfig(configPath?: string): LoadedConfig {
 
   const teamConfig = mergeTeamConfig(parsed.team);
   const repoConfigs = parsed.repos ?? [];
+  validateNames(teamConfig, repoConfigs);
   const repos = repoConfigs.map((r) => r.repo);
 
   return { teamConfig, repoConfigs, repos };

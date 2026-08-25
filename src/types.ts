@@ -100,9 +100,23 @@ export interface DifficultyResult {
   };
   /** Raw shape stats for the rationale string. */
   raw: {
+    /** Churn after per-file cap AND path-risk multipliers (drives the score). */
     totalChurn: number;
+    /** Churn after per-file cap only, ignoring path-risk (size baseline). */
+    baseChurn: number;
     filesChanged: number;
     directoriesTouched: number;
+  };
+  /** Path-risk weighting outcome (empty matches = risk-neutral PR). */
+  pathRisk: {
+    /** Changed files that matched a risk rule, with the applied multiplier. */
+    matched: { path: string; multiplier: number; label?: string }[];
+    /** Highest multiplier among matched files (1 when none matched). */
+    maxMultiplier: number;
+    /** True when the band was raised from its size-only value by a risky path. */
+    bandFloored: boolean;
+    /** The band computed from size alone, before any risk floor. */
+    sizeBand: DifficultyBand;
   };
 }
 

@@ -55,6 +55,18 @@ describe("formatRationale", () => {
     expect(hard).not.toContain("advisory: 'simple' is by diff size only");
   });
 
+  it("notes path-risk and band escalation for a small high-risk diff", () => {
+    const { rationaleInput } = rationaleFor({
+      pr: { files: [file("src/auth/login.ts", 3, 1)] },
+    });
+    const text = formatRationale(rationaleInput);
+
+    expect(text).toContain("Path-risk: touches auth");
+    expect(text).toContain("band raised from 'simple' to 'moderate'");
+    // The generic size-only advisory is replaced by the concrete path-risk note.
+    expect(text).not.toContain("advisory: 'simple' is by diff size only");
+  });
+
   it("includes the files-at-risk line only when atRiskCount > 0", () => {
     const withRisk = formatRationale(
       rationaleFor({

@@ -83,12 +83,17 @@ export function jira(partial: JiraData = {}): JiraData {
   return { ...partial };
 }
 
-/** Small diff that lands in the simple band. */
+/** Small diff that lands in the simple band. Deliberately risk-neutral paths. */
 export function simpleFiles(): FileChange[] {
   return [
-    file("src/auth/login.ts", 5, 3),
-    file("src/auth/session.ts", 4, 2),
+    file("src/ui/button.tsx", 5, 3),
+    file("src/ui/list.tsx", 4, 2),
   ];
+}
+
+/** Small diff by size, but touches a high-risk path (auth) — should NOT stay simple. */
+export function riskySimpleFiles(): FileChange[] {
+  return [file("src/auth/login.ts", 5, 3)];
 }
 
 /** Mid-sized diff that lands in the moderate band. */
