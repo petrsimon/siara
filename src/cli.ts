@@ -8,8 +8,8 @@ import { loadConfig } from "./config-loader.js";
 import { generateDashboard } from "./dashboard/index.js";
 import { daily, dryRun, sync } from "./runtime/index.js";
 import { openStore } from "./store/sqliteStore.js";
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 const USAGE = `Siara — deterministic PR reviewer assigner
 
@@ -61,6 +61,7 @@ async function main(): Promise<void> {
       const outPath = resolve(parseDashboardOut(process.argv));
       const assignments = await store.readAssignments();
       const html = generateDashboard({ assignments, generatedAtIso: nowIso });
+      mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, html, "utf8");
       console.log(`Dashboard written to ${outPath} (${assignments.length} assignment(s))`);
       return;

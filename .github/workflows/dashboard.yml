@@ -1,0 +1,77 @@
+name: Publish dashboard
+
+# Builds the Siara dashboard from the git-tracked assignment log
+# (data/assignments.jsonl), encrypts it with StatiCrypt (client-side AES via a
+# shared password), and deploys it to GitHub Pages. No `gh` auth or team config
+# is needed — the dashboard reads only the committed assignment log.
+
+on:
+  # Rebuild whenever the assignment log changes on main.
+  push:
+    branches: [main]
+    paths:
+      - "data/assignments.jsonl"
+      - "src/dashboard/**"
+      - ".github/workflows/dashboard.yml"
+  # Daily refresh so "age"/trend metrics stay current even with no new commits.
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two Pages deploys at once; let a newer run cancel a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Generate dashboard
+        run: npm run dashboard
+
+      - name: Encrypt dashboard (StatiCrypt)
+        env:
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+        run: |
+          if [ -z "$DASHBOARD_PASSWORD" ]; then
+            echo "::error::DASHBOARD_PASSWORD secret is not set. Add it in repo Settings → Secrets → Actions." >&2
+            exit 1
+          fi
+          # StatiCrypt v3: encrypt in place (output dir == source dir).
+          npx --yes staticrypt@3 public/index.html \
+            --password "$DASHBOARD_PASSWORD" \
+            --short \
+            --directory public
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

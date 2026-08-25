@@ -42,10 +42,14 @@ A continuous 0–1 score from diff shape (churn, file count, directory spread �
 each normalized to 0–1 before weighting), mapped to `simple` / `moderate` /
 `hard`. See the [plan](#status) for the full formula.
 
-> **Risk ≠ size.** Difficulty is pure size/spread today. A one-line auth/crypto
-> change scores "simple" while being high-risk, so simple-path education routing
-> is flagged as *advisory* in the rationale until path-risk weighting lands
-> (Phase 1.5).
+> **Risk ≠ size — handled.** Diff size alone would score a one-line auth/crypto
+> change as "simple" and route it to the least-familiar reviewer. Siara applies
+> **path-risk weighting**: files matching risk rules (auth, crypto, migrations,
+> secrets, infra…) have their churn multiplied *before* aggregation, and any
+> high-risk path **floors the band** (e.g. simple → moderate) so knowledge — not
+> education — drives routing. Rules and multipliers are configurable per team and
+> per repo (`pathRisk` in config). The rationale names the risky paths and the
+> escalation.
 
 ## Daily Slack workflow
 
@@ -94,6 +98,44 @@ config and build trust before going live.
 
 Environment: `SIARA_CONFIG` (default `./siara.config.json`), `SIARA_DB`
 (default `./siara.db`).
+
+### Publishing the dashboard (GitHub Pages)
+
+`.github/workflows/dashboard.yml` builds the dashboard from the git-tracked
+assignment log, encrypts it with **StatiCrypt** (client-side AES — the page
+decrypts in-browser on the right password), and deploys to GitHub Pages. The
+dashboard shows internal fairness data, so it is **never published in the
+clear**.
+
+Setup:
+
+1. Repo **Settings → Pages → Source: GitHub Actions**.
+2. Repo **Settings → Secrets and variables → Actions →** add `DASHBOARD_PASSWORD`
+   (share it with the team out-of-band, e.g. in Slack).
+
+The workflow runs on pushes to `data/assignments.jsonl`, daily on a schedule,
+and on manual dispatch. It needs no `gh` auth or team config — only the
+committed assignment log. If `DASHBOARD_PASSWORD` is unset the run fails loudly
+rather than publishing an unencrypted page.
+
+> Fallback: if the repo moves to a GitHub Enterprise org, switch to native
+> **private GitHub Pages** (org-member auth) and drop StatiCrypt.
+
+## Security
+
+- **No shell injection** — the GitHub adapter shells to `gh` via `execFile` with
+  argument arrays, never a shell string.
+- **Input validation** — repo slugs and logins from config are validated at load
+  time (`owner/name`, GitHub-username charset) before they reach `gh api`
+  endpoints, blocking path/query injection and `-`-leading argument confusion.
+- **Safe temp files** — PR-comment bodies are written to a private `mkdtemp`
+  directory (`0700`, `wx` flag), defeating predictable-name symlink attacks.
+- **Dashboard XSS** — every user-derived string is HTML-escaped before embedding.
+- **No secrets in the repo** — `siara.config.json` (roster, Jira IDs, emails) and
+  `siara.db` are gitignored; only `siara.config.example.json` is tracked. Auth is
+  delegated to the ambient `gh` credentials; `DASHBOARD_PASSWORD` is a CI secret.
+- **Parameterized SQL** and per-line-tolerant JSONL reads (one corrupt line can't
+  break the dashboard or forge a record).
 
 ## Development
 
