@@ -43,6 +43,13 @@ export interface GitHubAdapter {
 export interface JiraAdapter {
   /** Estimate / priority / epic for a ticket key. */
   getIssueData(key: string): Promise<JiraData>;
+  /**
+   * Per-reviewer "heads-down" workload weight — how busy each login is on their
+   * own high-priority/hard tickets, reducing review capacity. Returns a weight
+   * per login (0 = free). Stub returns {} until real Jira is wired; the manual
+   * `reviewerBusy` config is merged on top by sync.
+   */
+  getReviewerWorkload(logins: string[]): Promise<Record<string, number>>;
 }
 
 export interface SlackAdapter {
