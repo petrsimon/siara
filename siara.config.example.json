@@ -1,0 +1,13 @@
+{
+  "team": {
+    "roster": ["alice", "bob", "carol"],
+    "reviewersPerPr": 1,
+    "syncWindowDays": 90
+  },
+  "repos": [
+    {
+      "repo": "my-org/my-repo",
+      "blocklist": ["dependabot[bot]"]
+    }
+  ]
+}
