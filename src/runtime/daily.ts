@@ -202,9 +202,39 @@ export async function daily(
     return row;
   };
 
+  // Fetch every repo's open PRs up front so shadow-mode load feedback can be
+  // seeded from the full open set before any distribution happens.
+  const openPrsByRepo = new Map<string, PullRequest[]>();
+  for (const repo of deps.repos) {
+    openPrsByRepo.set(repo, await deps.github.listOpenPullRequests(repo));
+  }
+
+  // Shadow-mode load feedback. Live mode gets its fairness signal from GitHub
+  // (each request bumps openReviewLoad on the next sync); shadow posts nothing,
+  // so without this a whole batch scores against frozen near-zero load and the
+  // single strongest expert sweeps every PR. Here we synthesize that signal:
+  // seed from Siara's own still-open standing recommendations, then increment as
+  // we distribute the not-yet-recommended PRs — so the batch spreads like live.
+  const shadowLoad = new Map<string, number>();
+  if (!doPost) {
+    for (const [repo, prs] of openPrsByRepo) {
+      for (const pr of prs) {
+        // PRs with a real GitHub reviewer are already counted in openReviewLoad.
+        if (pr.requestedReviewers.length > 0) continue;
+        const prior = suggestions.get(prKey(repo, pr.number));
+        if (prior) {
+          for (const r of prior) shadowLoad.set(r, (shadowLoad.get(r) ?? 0) + 1);
+        }
+      }
+    }
+  }
+  const bumpShadowLoad = (logins: string[]): void => {
+    for (const r of logins) shadowLoad.set(r, (shadowLoad.get(r) ?? 0) + 1);
+  };
+
   for (const repo of deps.repos) {
     const resolved = findRepoConfig(deps, repo);
-    const openPrs = await deps.github.listOpenPullRequests(repo);
+    const openPrs = openPrsByRepo.get(repo) ?? [];
 
     for (const pr of openPrs) {
       // A PR that already has a requested reviewer is "pending", not "new":
@@ -248,8 +278,35 @@ export async function daily(
         pendingForRepost.push(pr);
       }
 
+      // Shadow mode: a still-open PR Siara already recommended keeps its pick
+      // (it's "assigned" in shadow terms) — re-scoring it against accumulated
+      // load would churn the recommendation every run. It's already counted in
+      // the shadowLoad seed above; report it unchanged and move on.
+      const prKeyStr = prKey(repo, pr.number);
+      const standing = !doPost ? suggestions.get(prKeyStr) : undefined;
+      if (standing) {
+        const band = bands.get(prKeyStr) ?? "moderate";
+        assigned.push({
+          repo,
+          pr: pr.number,
+          assignees: standing,
+          band,
+          rationale: `Standing recommendation (unchanged): @${standing.join(", @")}`,
+        });
+        snapshotPrs.push(snapshotRow(pr, standing, bands.get(prKeyStr)));
+        continue;
+      }
+
       const logins = resolved.roster;
-      const candidates = await deps.store.getCandidateHistory(repo, pr, logins);
+      const rawCandidates = await deps.store.getCandidateHistory(repo, pr, logins);
+      // In shadow mode fold the synthetic distribution load into openReviewLoad
+      // so each pick steers away from reviewers already loaded up this batch.
+      const candidates = doPost
+        ? rawCandidates
+        : rawCandidates.map((c) => ({
+            ...c,
+            openReviewLoad: c.openReviewLoad + (shadowLoad.get(c.login) ?? 0),
+          }));
       const jira = pr.jiraKey
         ? await deps.store.getJira(pr.jiraKey)
         : undefined;
@@ -260,6 +317,9 @@ export async function daily(
         jira,
         nowIso,
       });
+      if (!doPost && result.assignees.length > 0) {
+        bumpShadowLoad(result.assignees);
+      }
 
       const rationaleInput = {
         repo,
