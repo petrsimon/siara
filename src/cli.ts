@@ -115,11 +115,25 @@ async function main(): Promise<void> {
     const overrides = readOverridesFile(overridesPathFor(ASSIGNMENTS_PATH));
     const openPrs = readOpenPrsSnapshot(snapshotPathFor(ASSIGNMENTS_PATH));
     const responseTimes = readResponseReport(responsePathFor(ASSIGNMENTS_PATH));
+    // Optional: pull real names / emails / age thresholds from config. The
+    // dashboard must render without a config (public repo, gitignored config),
+    // so a missing/invalid config degrades to logins + default thresholds.
+    let reviewers: Record<string, { name?: string; email?: string }> | undefined;
+    let staleness: { warningDays: number; overdueDays: number } | undefined;
+    try {
+      const { teamConfig } = loadConfig();
+      reviewers = teamConfig.reviewers;
+      staleness = teamConfig.staleness;
+    } catch {
+      // No config available — fall back to defaults inside the renderer.
+    }
     const html = generateDashboard({
       assignments,
       overrides,
       openPrs,
       responseTimes,
+      reviewers,
+      staleness,
       generatedAtIso: nowIso,
     });
     mkdirSync(dirname(outPath), { recursive: true });

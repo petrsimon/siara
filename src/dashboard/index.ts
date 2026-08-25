@@ -25,6 +25,11 @@ export interface DashboardInput {
   /** Latest review-latency report — powers per-reviewer responsiveness stats.
    *  Optional (older logs predate it). */
   responseTimes?: ResponseTimeReport;
+  /** Reviewer directory (login → real name / email) for display + tooltips.
+   *  Loaded from siara.config.json; absent → logins shown verbatim. */
+  reviewers?: Record<string, { name?: string; email?: string }>;
+  /** Age → colour thresholds (days). Loaded from config; absent → defaults. */
+  staleness?: { warningDays: number; overdueDays: number };
   /** ISO timestamp for the "generated at" footer — injected for determinism. */
   generatedAtIso: string;
 }

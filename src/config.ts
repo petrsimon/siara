@@ -47,6 +47,10 @@ export interface ReviewerProps {
   until?: string;
   /** Free-text note surfaced in the admin page (e.g. "back Mon", "on-call"). */
   note?: string;
+  /** Real name for display in the dashboard (falls back to the login). */
+  name?: string;
+  /** Contact email, surfaced only in dashboard tooltips (never a hard filter). */
+  email?: string;
 }
 
 export interface SiaraTeamConfig {

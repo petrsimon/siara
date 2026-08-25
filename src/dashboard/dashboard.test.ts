@@ -339,30 +339,48 @@ describe("generateDashboard", () => {
       ],
       generatedAtIso,
     });
-    // Reviewer name carries a filter hook (both roster row and chart label).
+    // Reviewer name in the per-person chart carries a filter hook.
     expect(html).toContain('data-filter-login="alice"');
-    expect(html).toContain('class="reviewer-link"');
+    expect(html).toContain("svg-link");
     // Click wiring: switch to the open-prs tab and seed its search box.
     expect(html).toContain("[data-filter-login]");
     expect(html).toContain('.table-search[data-target="open-prs-table"]');
   });
 
-  it("renders a reviewer roster list with per-band counts", () => {
+  it("shows reviewer real names with a login/email tooltip, falling back to login", () => {
     const html = generateDashboard({
       assignments: [
         assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
-        assignment({ assignees: ["alice"], band: "simple", pr: 2 }),
-        assignment({ assignees: ["bob"], band: "moderate", pr: 3 }),
+        assignment({ assignees: ["bob"], band: "simple", pr: 2 }),
       ],
+      reviewers: { alice: { name: "Alice Cooper", email: "alice@example.com" } },
+      openPrs: {
+        takenAt: "2026-08-25T09:00:00.000Z",
+        prs: [
+          {
+            repo: "org/repo",
+            pr: 1,
+            title: "x",
+            author: "a",
+            assignees: ["alice"],
+            ageDays: 1,
+            band: "simple",
+            staleness: "normal",
+          },
+        ],
+      },
       generatedAtIso,
     });
-    expect(html).toContain("Reviewers");
-    expect(html).toContain("<th>Total</th>");
-    expect(html).toContain("alice");
-    expect(html).toContain("bob");
+    // Real name shown, nick + email in the tooltip.
+    expect(html).toContain("Alice Cooper");
+    expect(html).toContain('title="alice · alice@example.com"');
+    // A reviewer with no directory entry falls back to the login.
+    expect(html).toContain(">bob<");
+    // The assignees cell keeps the login searchable via data-logins.
+    expect(html).toContain('data-logins="alice"');
   });
 
-  it("renders the Sankey flow and flame-graph workload breakdown with counts", () => {
+  it("renders the Sankey flow with node counts", () => {
     const html = generateDashboard({
       assignments: [
         assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
@@ -374,10 +392,8 @@ describe("generateDashboard", () => {
     // Sankey: band → reviewer flow with node counts.
     expect(html).toContain("Assignment flow");
     expect(html).toContain("Ribbon thickness");
-    // Flame graph: All → reviewer → band, with the total on the root cell.
-    expect(html).toContain("Workload breakdown");
-    expect(html).toContain("All assignments 3");
-    expect(html).toContain("flame-label");
+    // The redundant flame-graph "Workload breakdown" was removed.
+    expect(html).not.toContain("Workload breakdown");
   });
 
   it("renders the open-PRs age overview and per-reviewer waiting stats", () => {
