@@ -16,6 +16,8 @@ siara.config.json
 
 # Generated dashboard (published via CI, not committed)
 dashboard.html
+# Local review artifacts — contain real reviewer names, never commit
+siara.distribution.html
 public/
 .staticrypt.json
 siara.db*

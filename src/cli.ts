@@ -4,11 +4,17 @@
  */
 import type { JiraAdapter } from "./adapters/index.js";
 import { GhCliGitHubAdapter } from "./adapters/github.js";
+import { JiraCloudAdapter } from "./adapters/jira.js";
 import { LocalGitGitHubAdapter } from "./adapters/localGit.js";
+import { SlackHttpAdapter } from "./adapters/slack.js";
+import type { SlackAdapter } from "./adapters/index.js";
+import type { SiaraTeamConfig } from "./config.js";
 import { loadConfig } from "./config-loader.js";
 import { generateDashboard } from "./dashboard/index.js";
 import { daily, dryRun, sync } from "./runtime/index.js";
 import { readAssignmentsFile } from "./store/assignmentsLog.js";
+import { overridesPathFor, readOverridesFile } from "./store/overridesLog.js";
+import { readOpenPrsSnapshot, snapshotPathFor } from "./store/snapshotLog.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -21,6 +27,7 @@ Usage:
   siara daily [--no-sync]     Assign reviewers for pending PRs
   siara dry-run [--no-sync]   Score pending PRs without side effects
   siara dashboard [--out <file>]   Generate HTML dashboard (default: ./dashboard.html)
+  siara admin [--port <n>]    Local editable reviewer admin page (default: 4319)
   siara --help            Show this help
 
 Flags:
@@ -35,7 +42,47 @@ const noopJira: JiraAdapter = {
   async getIssueData() {
     return {};
   },
+  // No real Jira yet — reviewer busyness comes from the manual `reviewerBusy`
+  // config map, merged in by sync. Wire a real query here later.
+  async getReviewerWorkload() {
+    return {};
+  },
 };
+
+/**
+ * Real Jira Cloud adapter when config.jira + JIRA_USER/JIRA_ACCESS_TOKEN are all
+ * present; otherwise the noop (busyness falls back to the manual reviewerBusy
+ * map). Credentials come from the environment, never from config.
+ */
+function makeJira(teamConfig: SiaraTeamConfig): JiraAdapter {
+  const email = process.env.JIRA_USER;
+  const token = process.env.JIRA_ACCESS_TOKEN;
+  if (teamConfig.jira && email && token) {
+    return new JiraCloudAdapter({ email, token, config: teamConfig.jira });
+  }
+  if (teamConfig.jira && (!email || !token)) {
+    console.warn(
+      "Jira configured but JIRA_USER / JIRA_ACCESS_TOKEN not set — using manual reviewerBusy only.",
+    );
+  }
+  return noopJira;
+}
+
+/**
+ * Real Slack adapter when config.slack + SLACK_TOKEN are both present; otherwise
+ * undefined (daily skips Slack posts). The token comes from the environment,
+ * never from config; per RH policy it must target the sandbox workspace.
+ */
+function makeSlack(teamConfig: SiaraTeamConfig): SlackAdapter | undefined {
+  const token = process.env.SLACK_TOKEN;
+  if (teamConfig.slack && token) {
+    return new SlackHttpAdapter({ token, channel: teamConfig.slack.channel });
+  }
+  if (teamConfig.slack && !token) {
+    console.warn("Slack configured but SLACK_TOKEN not set — skipping Slack posts.");
+  }
+  return undefined;
+}
 
 function parseDashboardOut(argv: string[]): string {
   const outIdx = argv.indexOf("--out");
@@ -61,11 +108,29 @@ async function main(): Promise<void> {
   if (command === "dashboard") {
     const outPath = resolve(parseDashboardOut(process.argv));
     const assignments = readAssignmentsFile(ASSIGNMENTS_PATH);
-    const html = generateDashboard({ assignments, generatedAtIso: nowIso });
+    const overrides = readOverridesFile(overridesPathFor(ASSIGNMENTS_PATH));
+    const openPrs = readOpenPrsSnapshot(snapshotPathFor(ASSIGNMENTS_PATH));
+    const html = generateDashboard({ assignments, overrides, openPrs, generatedAtIso: nowIso });
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html, "utf8");
     console.log(`Dashboard written to ${outPath} (${assignments.length} assignment(s))`);
     return;
+  }
+
+  // Local admin page — reads/writes config only, no store or adapters.
+  if (command === "admin") {
+    const { startAdminServer } = await import("./admin/index.js");
+    const { teamConfig } = loadConfig();
+    const portIdx = process.argv.indexOf("--port");
+    const port =
+      portIdx !== -1 && process.argv[portIdx + 1]
+        ? Number(process.argv[portIdx + 1])
+        : 4319;
+    const configPath = process.env.SIARA_CONFIG ?? "./siara.config.json";
+    startAdminServer({ configPath, port, roster: teamConfig.roster });
+    console.log(`Siara admin page: http://127.0.0.1:${port}  (Ctrl-C to stop)`);
+    console.log(`Editing ${resolve(configPath)}`);
+    return; // keep the process alive on the listening server
   }
 
   // sync / daily / dry-run need the SQLite store — load it lazily so `dashboard`
@@ -97,7 +162,8 @@ async function main(): Promise<void> {
     const deps = {
       store,
       github,
-      jira: noopJira,
+      jira: makeJira(teamConfig),
+      slack: makeSlack(teamConfig),
       teamConfig,
       repoConfigs,
       repos,
@@ -139,6 +205,14 @@ async function main(): Promise<void> {
           console.log(`Assigned ${result.assigned.length} PR(s):`);
           for (const a of result.assigned) {
             console.log(`  ${a.repo}#${a.pr} → ${a.assignees.join(", ")} [${a.band}]`);
+          }
+        }
+        if (result.overrides.length > 0) {
+          console.log(`Detected ${result.overrides.length} manual override(s):`);
+          for (const o of result.overrides) {
+            console.log(
+              `  ${o.repo}#${o.pr} suggested [${o.suggested.join(", ")}] → actual [${o.actual.join(", ")}]`,
+            );
           }
         }
         break;
