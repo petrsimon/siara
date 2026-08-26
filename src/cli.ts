@@ -16,7 +16,7 @@ import { daily, dryRun, sync } from "./runtime/index.js";
 import { readAssignmentsFile } from "./store/assignmentsLog.js";
 import { overridesPathFor, readOverridesFile } from "./store/overridesLog.js";
 import { readOpenPrsSnapshot, snapshotPathFor } from "./store/snapshotLog.js";
-import { readResponseReport, responsePathFor } from "./store/responseLog.js";
+import { readResponseReport, responsePathFor, writeResponseReport } from "./store/responseLog.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -138,8 +138,10 @@ async function main(): Promise<void> {
     let staleness: { warningDays: number; overdueDays: number } | undefined;
     let windowDays: number | undefined;
     let algorithm: Parameters<typeof generateDashboard>[0]["algorithm"];
+    let repos: string[] | undefined;
     try {
-      const { teamConfig } = loadConfig();
+      const { teamConfig, repos: configRepos } = loadConfig();
+      repos = configRepos;
       reviewers = teamConfig.reviewers;
       staleness = teamConfig.staleness;
       windowDays = teamConfig.syncWindowDays;
@@ -159,6 +161,24 @@ async function main(): Promise<void> {
     } catch {
       // No config available — fall back to defaults inside the renderer.
     }
+
+    let enrichedResponses = responseTimes;
+    if (responseTimes && repos && repos.length > 0) {
+      const { enrichResponseAuthors } = await import("./dashboard/enrichAuthors.js");
+      const before = responseTimes.responses.filter((r) => r.author).length;
+      enrichedResponses = await enrichResponseAuthors(
+        responseTimes,
+        repos,
+        windowDays ?? 90,
+        openPrs,
+        nowIso,
+      );
+      const after = enrichedResponses?.responses.filter((r) => r.author).length ?? 0;
+      if (after > before && enrichedResponses) {
+        writeResponseReport(responsePathFor(ASSIGNMENTS_PATH), enrichedResponses);
+      }
+    }
+
     const STRAT_JSON = "./data/strategy-comparison.json";
     let strategyComparison: StrategyComparison | undefined;
     if (existsSync(STRAT_JSON)) {
@@ -173,7 +193,7 @@ async function main(): Promise<void> {
       assignments,
       overrides,
       openPrs,
-      responseTimes,
+      responseTimes: enrichedResponses,
       reviewers,
       staleness,
       windowDays,
