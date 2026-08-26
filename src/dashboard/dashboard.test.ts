@@ -585,6 +585,7 @@ describe("generateDashboard", () => {
     expect(html).toContain("Box shows quartiles");
     expect(html).toContain("bob");
     expect(html).toContain("5d");
+    expect(html).toContain("Author × reviewer time to merge");
   });
 
   it("shows PR difficulty metadata in the manual-override row", () => {

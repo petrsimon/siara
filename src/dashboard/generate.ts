@@ -3,7 +3,7 @@ import type { DashboardInput, DashboardMetrics, StrategyComparison, StrategyComp
 import type { StrategyName } from "../scoring/pickReviewers.js";
 import { buildMetrics, historyAssignments } from "./metrics.js";
 import { escapeHtml } from "./html.js";
-import { renderAgeDistribution, renderDifficultyAgeScatter, renderMergeTimeDistribution, CHART_STYLES } from "./charts.js";
+import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution, CHART_STYLES } from "./charts.js";
 
 const BANDS = ["simple", "moderate", "hard"] as const;
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -46,6 +46,12 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const sankeySection = renderSankey(metrics, dir);
   const openPrs = input.openPrs?.prs ?? [];
   const waitingSection = renderMergeTimeDistribution(input.responseTimes?.responses ?? [], dir, input.windowDays);
+  const authorReviewerMatrix = renderAuthorReviewerMergeMatrix(
+    input.responseTimes?.responses ?? [],
+    dir,
+    openPrs,
+    input.windowDays,
+  );
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
   const algorithmSection = renderAlgorithmSection(input.algorithm);
@@ -147,6 +153,8 @@ ${STYLES}
     ${diffAgeScatter}
 
     ${waitingSection}
+
+    ${authorReviewerMatrix}
 
     ${overridesSection}
     </div>

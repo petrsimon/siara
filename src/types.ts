@@ -234,6 +234,8 @@ export interface ReviewResponse {
   repo: string;
   pr: number;
   reviewer: string;
+  /** PR author login, when known (from open PRs or merged-PR sync). */
+  author?: string;
   /** ISO timestamp GitHub requested this reviewer (`review_requested`).
    *  Completed reviews may fall back to the Siara assignment-log date. */
   assignedAt: string;

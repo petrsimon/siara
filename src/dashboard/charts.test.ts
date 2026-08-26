@@ -1,12 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { renderAgeDistribution, renderDifficultyAgeScatter, renderMergeTimeDistribution } from "./charts.js";
+import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution } from "./charts.js";
 import type { OpenPrSnapshot, ReviewResponse } from "../types.js";
 
-function merged(reviewer: string, mergeHours: number, pr: number): ReviewResponse {
+function merged(
+  reviewer: string,
+  mergeHours: number,
+  pr: number,
+  author = "alice",
+): ReviewResponse {
   return {
     repo: "org/repo",
     pr,
     reviewer,
+    author,
     assignedAt: "2026-08-20T00:00:00.000Z",
     outstanding: false,
     mergedAt: "2026-09-01T00:00:00.000Z",
@@ -180,6 +186,63 @@ describe("charts", () => {
       expect(html).toContain("dave");
       expect(html).not.toContain("bob");
       expect(html).not.toContain("carol");
+    });
+  });
+
+  describe("renderAuthorReviewerMergeMatrix", () => {
+    it("renders empty state when no merge data with authors", () => {
+      const html = renderAuthorReviewerMergeMatrix([], {}, [], 90);
+      expect(html).toContain("Author × reviewer time to merge");
+      expect(html).toContain("No merged PRs with author");
+    });
+
+    it("renders a heatmap cell per author/reviewer pair", () => {
+      const responses = [
+        merged("bob", 5 * 24, 1, "alice"),
+        merged("bob", 10 * 24, 2, "alice"),
+        merged("carol", 3 * 24, 3, "dave"),
+      ];
+      const dir = {
+        alice: { name: "Alice Cooper" },
+        bob: { name: "Bob Smith" },
+        carol: { name: "Carol Jones" },
+        dave: { name: "Dave Evans" },
+      };
+      const html = renderAuthorReviewerMergeMatrix(responses, dir, [], 90);
+
+      expect(html).toContain("Author × reviewer time to merge");
+      expect(html).toContain("Alice Cooper");
+      expect(html).toContain("Bob Smith");
+      expect(html).toContain("Dave Evans");
+      expect(html).toContain("7.5d");
+      expect(html).toContain("3d");
+    });
+
+    it("falls back to open-PR snapshot authors when response rows omit author", () => {
+      const responses = [
+        {
+          repo: "org/repo",
+          pr: 9,
+          reviewer: "bob",
+          assignedAt: "2026-08-01T00:00:00.000Z",
+          outstanding: false,
+          mergedAt: "2026-08-06T00:00:00.000Z",
+          mergeHours: 120,
+        },
+      ];
+      const openPrs = [
+        {
+          repo: "org/repo",
+          pr: 9,
+          title: "x",
+          author: "alice",
+          assignees: ["bob"],
+          staleness: "normal" as const,
+        },
+      ];
+      const html = renderAuthorReviewerMergeMatrix(responses, {}, openPrs, 90);
+      expect(html).toContain("5d");
+      expect(html).not.toContain("No merged PRs");
     });
   });
 });

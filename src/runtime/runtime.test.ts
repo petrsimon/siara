@@ -448,6 +448,7 @@ describe("daily live", () => {
     expect(bob?.mergedAt).toBe(mergedAt);
     expect(bob?.assignedAt).toBe(requestedAt);
     expect(bob?.mergeHours).toBe(hoursBetween(requestedAt, mergedAt));
+    expect(bob?.author).toBe("author");
   });
 
   it("omits merge time when GitHub never recorded the review request", async () => {

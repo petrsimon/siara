@@ -141,6 +141,16 @@ async function computeResponses(
     firstReqByRepo.set(repo, firstRequestedAt(requestEvents));
   }
 
+  const authorByPr = new Map<string, string>();
+  for (const pr of openPrs) {
+    authorByPr.set(prKey(pr.repo, pr.number), pr.author);
+  }
+  for (const [repo, merged] of mergedByRepo) {
+    for (const m of merged) {
+      authorByPr.set(prKey(repo, m.number), m.author);
+    }
+  }
+
   const responses: ReviewResponse[] = [];
   const emitted = new Set<string>();
 
@@ -247,6 +257,10 @@ async function computeResponses(
         }
       }
     }
+  }
+  for (const r of responses) {
+    const author = authorByPr.get(prKey(r.repo, r.pr));
+    if (author !== undefined) r.author = author;
   }
   return responses;
 }

@@ -437,6 +437,108 @@ ${r.ages.length} merged</title></rect>`;
     </section>`;
 }
 
+/**
+ * Author × reviewer heatmap: median time-to-merge (days) per author/reviewer pair.
+ * Darker = slower. Cell label shows median; tooltip includes PR count.
+ */
+export function renderAuthorReviewerMergeMatrix(
+  responses: ReviewResponse[],
+  dir: Record<string, { name?: string; email?: string }>,
+  openPrs: OpenPrSnapshot[] = [],
+  windowDays = 90,
+): string {
+  const authorByPr = new Map<string, string>();
+  for (const pr of openPrs) {
+    authorByPr.set(`${pr.repo}#${pr.pr}`, pr.author);
+  }
+
+  const cellData = new Map<string, number[]>();
+  for (const r of responses) {
+    if (r.mergeHours === undefined) continue;
+    const author = r.author ?? authorByPr.get(`${r.repo}#${r.pr}`);
+    if (!author) continue;
+    const key = `${author}\0${r.reviewer}`;
+    const list = cellData.get(key) ?? [];
+    list.push(r.mergeHours / 24);
+    cellData.set(key, list);
+  }
+
+  if (cellData.size === 0) {
+    return `<section><h2>Author × reviewer time to merge</h2><p class="empty">No merged PRs with author and review-request data in the last ${windowDays} days.</p></section>`;
+  }
+
+  const authors = [...new Set([...cellData.keys()].map((k) => k.split("\0")[0]!))].sort(
+    (a, b) => {
+      const ca = [...cellData.keys()].filter((k) => k.startsWith(`${a}\0`)).length;
+      const cb = [...cellData.keys()].filter((k) => k.startsWith(`${b}\0`)).length;
+      return cb - ca || a.localeCompare(b);
+    },
+  );
+  const reviewers = [...new Set([...cellData.keys()].map((k) => k.split("\0")[1]!))].sort(
+    (a, b) => {
+      const ca = [...cellData.keys()].filter((k) => k.endsWith(`\0${a}`)).length;
+      const cb = [...cellData.keys()].filter((k) => k.endsWith(`\0${b}`)).length;
+      return cb - ca || a.localeCompare(b);
+    },
+  );
+
+  const medians = [...cellData.values()].map((days) => quartiles(days).median);
+  const maxMedian = Math.max(...medians, 1);
+
+  const labelW = 140;
+  const cell = 44;
+  const cgap = 8;
+  const colW = cell + cgap;
+  const labelH = 96;
+  const W = labelW + reviewers.length * colW;
+  const H = authors.length * colW + labelH;
+
+  const rows = authors
+    .map((author, rI) => {
+      const y = rI * colW;
+      const label = `<text x="${labelW - 10}" y="${y + cell / 2}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(author, dir))}<title>${escapeHtml(personTitle(author, dir))}</title></text>`;
+      const cells = reviewers
+        .map((reviewer, cI) => {
+          const days = cellData.get(`${author}\0${reviewer}`);
+          const x = labelW + cI * colW;
+          if (!days || days.length === 0) {
+            return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="4" fill="var(--border)" fill-opacity="0.35"><title>${escapeHtml(displayName(author, dir))} → ${escapeHtml(displayName(reviewer, dir))}: no data</title></rect>`;
+          }
+          const med = quartiles(days).median;
+          const intensity = med / maxMedian;
+          const op = 0.18 + 0.82 * intensity;
+          const label =
+            cell >= 36
+              ? `<text x="${x + cell / 2}" y="${y + cell / 2}" class="heat-num" fill="${intensity > 0.55 ? "#fff" : "var(--text)"}" text-anchor="middle" dominant-baseline="central">${fmtDays(med)}d</text>`
+              : "";
+          return (
+            `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="4" fill="var(--accent)" fill-opacity="${fmt(op)}"><title>${escapeHtml(displayName(author, dir))} → ${escapeHtml(displayName(reviewer, dir))}
+Median: ${fmtDays(med)}d (${days.length} PR${days.length === 1 ? "" : "s"})</title></rect>` +
+            label
+          );
+        })
+        .join("");
+      return label + cells;
+    })
+    .join("");
+
+  const ticks = reviewers
+    .map((reviewer, cI) => {
+      const x = labelW + cI * colW + cell / 2;
+      const y = authors.length * colW + 14;
+      return `<text x="${fmt(x)}" y="${y}" class="svg-tick" text-anchor="end" transform="rotate(-40 ${fmt(x)} ${y})">${escapeHtml(displayName(reviewer, dir))}</text>`;
+    })
+    .join("");
+
+  const chart = svg(W, H, rows + ticks, "Author by reviewer median time to merge");
+
+  return `<section>
+      <h2>Author × reviewer time to merge</h2>
+      <p class="section-hint">Median days from review request to merge for each author→reviewer pair. Darker = slower. Only PRs merged in the last ${windowDays} days with a known author and GitHub review-request time.</p>
+      <div class="scroll-x">${chart}</div>
+    </section>`;
+}
+
 /** Display label for a reviewer: real name if known, else the login. */
 function displayName(login: string, dir: Record<string, { name?: string; email?: string }>): string {
   return dir[login]?.name?.trim() || login;
