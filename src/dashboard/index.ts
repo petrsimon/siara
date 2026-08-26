@@ -14,7 +14,7 @@ import type {
 } from "../types.js";
 import type { StrategyName } from "../scoring/pickReviewers.js";
 import { renderDashboardHtml } from "./generate.js";
-import { buildMetrics } from "./metrics.js";
+import { buildMetrics, historyAssignments } from "./metrics.js";
 
 export interface DashboardInput {
   assignments: Assignment[];
@@ -118,6 +118,9 @@ export function computeMetrics(
 ): DashboardMetrics {
   return buildMetrics(assignments, overrides);
 }
+
+/** One assignment row per PR for history charts (deduped log + merged PRs). */
+export { historyAssignments } from "./metrics.js";
 
 /** Render the full static dashboard HTML. Pure. */
 export function generateDashboard(input: DashboardInput): string {

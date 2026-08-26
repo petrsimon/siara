@@ -1,7 +1,7 @@
-import type { Assignment, DifficultyBand, OpenPrSnapshot, ReviewResponse } from "../types.js";
+import type { Assignment, DifficultyBand, OpenPrSnapshot } from "../types.js";
 import type { DashboardInput, DashboardMetrics, StrategyComparison, StrategyComparisonMetrics } from "./index.js";
 import type { StrategyName } from "../scoring/pickReviewers.js";
-import { buildMetrics } from "./metrics.js";
+import { buildMetrics, historyAssignments } from "./metrics.js";
 import { escapeHtml } from "./html.js";
 import { renderAgeDistribution, renderDifficultyAgeScatter, renderMergeTimeDistribution, CHART_STYLES } from "./charts.js";
 
@@ -33,24 +33,26 @@ function personCell(login: string, dir: Directory): string {
 export function renderDashboardHtml(input: DashboardInput): string {
   const overrides = input.overrides ?? [];
   const metrics = buildMetrics(input.assignments, overrides);
+  const historyMetrics = buildMetrics(
+    historyAssignments(input.assignments, input.responseTimes?.responses ?? []),
+    overrides,
+  );
 
   const dir: Directory = input.reviewers ?? {};
   const staleness = input.staleness ?? { warningDays: 3, overdueDays: 5 };
-  const perPersonChart = renderPerPersonChart(metrics, dir);
   const difficultyChart = renderDifficultyDonut(metrics);
   const trendChart = renderTrendChart(metrics);
   const heatmap = renderHeatmap(input.assignments, dir);
   const sankeySection = renderSankey(metrics, dir);
   const openPrs = input.openPrs?.prs ?? [];
   const waitingSection = renderMergeTimeDistribution(input.responseTimes?.responses ?? [], dir, input.windowDays);
-  const responseSection = renderResponseSection(input.responseTimes?.responses ?? [], dir);
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
   const algorithmSection = renderAlgorithmSection(input.algorithm);
   const strategySection = renderStrategySection(input.strategyComparison, dir);
   const ageDistSection = renderAgeDistribution(openPrs);
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
-  const currentStateSection = renderCurrentState(openPrs, dir);
+  const assignmentsSection = renderAssignmentsSection(openPrs, historyMetrics, dir);
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -118,14 +120,7 @@ ${STYLES}
       </div>
     </div>
 
-    ${currentStateSection}
-
-    <section>
-      <h2>Assignment history</h2>
-      <p class="section-hint">Cumulative assignments over time — shows the total volume and difficulty mix each reviewer has received. Height of the hard band shows who carries the risk, not just the count.</p>
-      ${renderLegend()}
-      ${perPersonChart}
-    </section>
+    ${assignmentsSection}
 
     <div class="grid-2">
       <section>
@@ -152,8 +147,6 @@ ${STYLES}
     ${diffAgeScatter}
 
     ${waitingSection}
-
-    ${responseSection}
 
     ${overridesSection}
     </div>
@@ -200,6 +193,22 @@ ${STYLES}
           }
         });
       })(tab);
+    }
+    // Sub-tabs inside a section (e.g. Current vs History assignments).
+    for (var sub of document.querySelectorAll(".sub-tab")) {
+      (function (sub) {
+        sub.addEventListener("click", function () {
+          var group = sub.closest("[data-subtab-group]");
+          if (!group) return;
+          var name = sub.getAttribute("data-subtab");
+          for (var t of group.querySelectorAll(".sub-tab")) {
+            t.classList.toggle("active", t === sub);
+          }
+          for (var p of group.querySelectorAll(".sub-panel")) {
+            p.classList.toggle("hidden", p.id !== name);
+          }
+        });
+      })(sub);
     }
     // Sortable tables: click a header to sort (toggles asc/desc). Numeric columns
     // sort on a data-val attribute when the display text differs from the value.
@@ -582,77 +591,6 @@ function renderSankey(metrics: DashboardMetrics, dir: Directory): string {
 }
 
 
-/** Median of a non-empty numeric list. */
-function median(xs: number[]): number {
-  const s = [...xs].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 0 ? ((s[mid - 1] ?? 0) + (s[mid] ?? 0)) / 2 : (s[mid] ?? 0);
-}
-
-/**
- * Per-reviewer responsiveness: time from assignment to first review, plus how
- * many assignments are still outstanding (open, no review yet) and the oldest.
- * Outstanding reviewers sort first — they're the ones holding PRs up now.
- */
-function renderResponseSection(responses: ReviewResponse[], dir: Directory): string {
-  if (responses.length === 0) {
-    return `<section><h2>Response time</h2><p class="empty">No review-latency data yet.</p></section>`;
-  }
-  const byReviewer = new Map<
-    string,
-    { latencies: number[]; waits: number[] }
-  >();
-  for (const r of responses) {
-    const agg = byReviewer.get(r.reviewer) ?? { latencies: [], waits: [] };
-    if (!r.outstanding && r.latencyHours !== undefined) {
-      agg.latencies.push(r.latencyHours);
-    } else if (r.outstanding && r.waitingHours !== undefined) {
-      agg.waits.push(r.waitingHours);
-    }
-    byReviewer.set(r.reviewer, agg);
-  }
-
-  const days = (hours: number): string => `${(hours / 24).toFixed(1)}d`;
-  const rows = [...byReviewer.entries()]
-    .map(([login, { latencies, waits }]) => ({
-      login,
-      reviewed: latencies.length,
-      medianH: latencies.length > 0 ? median(latencies) : undefined,
-      slowestH: latencies.length > 0 ? Math.max(...latencies) : undefined,
-      outstanding: waits.length,
-      oldestWaitH: waits.length > 0 ? Math.max(...waits) : undefined,
-    }))
-    .sort((a, b) =>
-      b.outstanding !== a.outstanding
-        ? b.outstanding - a.outstanding
-        : (b.oldestWaitH ?? b.medianH ?? 0) - (a.oldestWaitH ?? a.medianH ?? 0),
-    );
-
-  const body = rows
-    .map(
-      (r) => `
-        <tr>
-          <td class="login">${personCell(r.login, dir)}</td>
-          <td class="count">${r.reviewed}</td>
-          <td class="count">${r.medianH === undefined ? "—" : days(r.medianH)}</td>
-          <td class="count">${r.slowestH === undefined ? "—" : days(r.slowestH)}</td>
-          <td class="count">${r.outstanding || "—"}</td>
-          <td class="count">${r.oldestWaitH === undefined ? "—" : days(r.oldestWaitH)}</td>
-        </tr>`,
-    )
-    .join("");
-  return `<section>
-      <h2>Response time</h2>
-      <p class="section-hint">Time from assignment to a reviewer's first review. Outstanding = assigned on a still-open PR with no review yet (sorted to the top).</p>
-      <table>
-        <thead>
-          <tr><th>Reviewer</th><th>Reviewed</th><th>Median</th><th>Slowest</th><th>Outstanding</th><th>Oldest waiting</th></tr>
-        </thead>
-        <tbody>${body}</tbody>
-      </table>
-    </section>`;
-}
-
 /** Age → colour by staleness thresholds (green / yellow / red). */
 function ageColor(
   ageDays: number,
@@ -735,6 +673,16 @@ function renderOpenPrsSection(
 // Strategy comparison tab
 // ---------------------------------------------------------------------------
 
+/** Primary Siara strategy — the live scorer and comparison baseline. */
+const MAIN_STRATEGY = "siara-v2";
+
+function strategyBaseline(strategies: StrategyName[]): StrategyName {
+  if ((strategies as readonly string[]).includes(MAIN_STRATEGY)) {
+    return MAIN_STRATEGY as StrategyName;
+  }
+  return strategies.includes("siara") ? "siara" : strategies[0]!;
+}
+
 const STRAT_COLORS: Record<string, string> = {
   siara: "#3b6df6",
   "siara-floor": "#e6833a",
@@ -773,22 +721,32 @@ function renderStrategySection(
   }
 
   const strategies = data.strategies as StrategyName[];
+  const baseline = strategyBaseline(strategies);
+  const orderedStrategies = [
+    baseline,
+    ...strategies.filter((s) => s !== baseline),
+  ];
+  const baselineLabel = STRAT_LABELS[baseline] ?? baseline;
 
-  // --- KPI cards ---
-  const kpis = data.metrics
-    .map(
-      (m) => `
-    <div class="strat-card">
-      <div class="strat-name" style="color:${STRAT_COLORS[m.strategy] ?? "var(--accent)"}">${escapeHtml(STRAT_LABELS[m.strategy] ?? m.strategy)}</div>
+  // --- KPI cards (primary strategy first, highlighted) ---
+  const metricsByStrategy = new Map(data.metrics.map((m) => [m.strategy, m]));
+  const kpis = orderedStrategies
+    .map((strategy) => {
+      const m = metricsByStrategy.get(strategy);
+      if (!m) return "";
+      const isMain = strategy === baseline;
+      return `
+    <div class="strat-card${isMain ? " strat-card-main" : ""}">
+      <div class="strat-name" style="color:${STRAT_COLORS[m.strategy] ?? "var(--accent)"}">${escapeHtml(STRAT_LABELS[m.strategy] ?? m.strategy)}${isMain ? " · live" : ""}</div>
       <div class="strat-kpis">
         <div class="strat-kpi"><span class="kpi-label">Gini</span><span class="kpi-value">${m.gini.toFixed(3)}</span></div>
         <div class="strat-kpi"><span class="kpi-label">Reviewers</span><span class="kpi-value">${m.activeReviewers}</span></div>
         <div class="strat-kpi"><span class="kpi-label">Max</span><span class="kpi-value">${m.maxLoad}</span></div>
         <div class="strat-kpi"><span class="kpi-label">Min</span><span class="kpi-value">${m.minLoad}</span></div>
-        <div class="strat-kpi"><span class="kpi-label">Match</span><span class="kpi-value">${m.agreementPct}%</span></div>
+        <div class="strat-kpi"><span class="kpi-label">Match</span><span class="kpi-value">${isMain ? "—" : `${m.agreementPct}%`}</span></div>
       </div>
-    </div>`,
-    )
+    </div>`;
+    })
     .join("");
 
   // --- Load distribution bar chart ---
@@ -804,14 +762,14 @@ function renderStrategySection(
   const rowH = 22;
   const groupGap = 10;
   const labelW = 140;
-  const groupH = strategies.length * rowH + groupGap;
+  const groupH = orderedStrategies.length * rowH + groupGap;
   const svgH = allLogins.length * groupH + 20;
 
   const loadBars = allLogins
     .map((login, gi) => {
       const gy = gi * groupH;
       const label = `<text x="${labelW - 8}" y="${gy + (groupH - groupGap) / 2}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(login, dir))}<title>${escapeHtml(personTitle(login, dir))}</title></text>`;
-      const bars = strategies
+      const bars = orderedStrategies
         .map((s, si) => {
           const m = data.metrics.find((x) => x.strategy === s);
           const v = m?.loadByPerson[login] ?? 0;
@@ -832,7 +790,7 @@ function renderStrategySection(
     })
     .join("");
 
-  const legendItems = strategies
+  const legendItems = orderedStrategies
     .map(
       (s) =>
         `<li><span class="swatch" style="background:${STRAT_COLORS[s]}"></span>${escapeHtml(STRAT_LABELS[s] ?? s)}</li>`,
@@ -847,7 +805,7 @@ function renderStrategySection(
   );
 
   // --- Per-PR comparison table ---
-  const headerCells = strategies
+  const headerCells = orderedStrategies
     .map((s) => `<th>${escapeHtml(STRAT_LABELS[s] ?? s)}</th>`)
     .join("");
 
@@ -855,15 +813,14 @@ function renderStrategySection(
     .map((row) => {
       const short = row.repo.split("/").pop() ?? row.repo;
       const bandBadge = `<span class="badge" style="background:var(--band-${row.band})">${BAND_LABEL[row.band]}</span>`;
-      const cells = strategies
+      const cells = orderedStrategies
         .map((s) => {
           const pick = row.picks[s] ?? [];
-          const siaraPick = row.picks.siara ?? [];
+          const ref = row.picks[baseline] ?? row.picks.siara ?? [];
           const same =
-            s === "siara" ||
-            (pick.length === siaraPick.length &&
-              pick.every((l) => siaraPick.includes(l)));
-          const cls = s === "siara" ? "" : same ? "strat-same" : "strat-diff";
+            s === baseline ||
+            (pick.length === ref.length && pick.every((l) => ref.includes(l)));
+          const cls = s === baseline ? "" : same ? "strat-same" : "strat-diff";
           return `<td class="${cls}">${pick.map((l) => escapeHtml(displayName(l, dir))).join(", ") || "—"}</td>`;
         })
         .join("");
@@ -881,7 +838,7 @@ function renderStrategySection(
 
   return `<section>
       <h2>Strategy comparison</h2>
-      <p class="section-hint">Side-by-side evaluation of ${strategies.length} reviewer-selection strategies on ${data.totalPrs} open PRs${genAt ? ` (${genAt})` : ""}. Lower Gini = more even workload. Match = agreement with Siara.</p>
+      <p class="section-hint">Side-by-side evaluation of ${orderedStrategies.length} reviewer-selection strategies on ${data.totalPrs} open PRs${genAt ? ` (${genAt})` : ""}. <strong>${escapeHtml(baselineLabel)}</strong> is the live strategy — lower Gini = more even workload. Match = agreement with ${escapeHtml(baselineLabel)}.</p>
       <div class="strat-grid">${kpis}</div>
     </section>
 
@@ -894,7 +851,7 @@ function renderStrategySection(
 
     <section>
       <h2>Per-PR picks</h2>
-      <p class="section-hint">Who each strategy would assign. <span class="strat-same-dot">Green</span> = same as Siara, <span class="strat-diff-dot">red</span> = different. Click PR to open on GitHub.</p>
+      <p class="section-hint">Who each strategy would assign. <span class="strat-same-dot">Green</span> = same as ${escapeHtml(baselineLabel)}, <span class="strat-diff-dot">red</span> = different. Click PR to open on GitHub.</p>
       <div class="scroll-x">
       <table>
         <thead><tr><th>PR</th><th>Difficulty</th>${headerCells}</tr></thead>
@@ -1094,15 +1051,46 @@ function renderOverridesSection(input: DashboardInput, overrides: DashboardInput
 }
 
 /**
- * Current assignment state: per-reviewer open PR count and band breakdown.
- * Built from the live open-PRs snapshot — shows "right now", not cumulative history.
+ * Current vs historical assignment workload — one section, two sub-tabs.
  */
-function renderCurrentState(
+function renderAssignmentsSection(
+  openPrs: OpenPrSnapshot[],
+  historyMetrics: DashboardMetrics,
+  dir: Directory,
+): string {
+  const currentBody = renderCurrentAssignmentsChart(openPrs, dir);
+  const historyChart = renderPerPersonChart(historyMetrics, dir);
+  const totalOpen = openPrs.length;
+  const unassigned = openPrs.filter((pr) => pr.assignees.length === 0).length;
+  const historyTotal = Object.values(historyMetrics.reviewsPerPerson).reduce(
+    (s, n) => s + n,
+    0,
+  );
+
+  return `<section data-subtab-group="assignments">
+      <h2>Review assignments</h2>
+      <nav class="sub-tabs" role="tablist" aria-label="Assignment view">
+        <button class="sub-tab active" type="button" data-subtab="assign-current">Current</button>
+        <button class="sub-tab" type="button" data-subtab="assign-history">History</button>
+      </nav>
+      <div class="sub-panel" id="assign-current">
+        <p class="section-hint">${totalOpen > 0 ? `${totalOpen} open PRs right now${unassigned > 0 ? `, ${unassigned} unassigned` : ""}.` : "No open PRs in the latest snapshot."} Click a reviewer name to see their PRs.</p>
+        ${totalOpen > 0 ? `${renderLegend()}${currentBody}` : `<p class="empty">No open PRs in the latest snapshot.</p>`}
+      </div>
+      <div class="sub-panel hidden" id="assign-history">
+        <p class="section-hint">${historyTotal} review assignment(s) across ${historyMetrics.activeReviewers} reviewer(s) — one row per PR (includes merged PRs from GitHub review requests, not only net-new Siara picks). Height of the hard band shows who carries the risk.</p>
+        ${historyTotal > 0 ? `${renderLegend()}${historyChart}` : `<p class="empty">No assignment history yet.</p>`}
+      </div>
+    </section>`;
+}
+
+/** Stacked bar chart of open review load per reviewer (current snapshot). */
+function renderCurrentAssignmentsChart(
   openPrs: OpenPrSnapshot[],
   dir: Directory,
 ): string {
   if (openPrs.length === 0) {
-    return `<section><h2>Current assignments</h2><p class="empty">No open PRs in the latest snapshot.</p></section>`;
+    return "";
   }
 
   interface ReviewerState {
@@ -1168,22 +1156,12 @@ function renderCurrentState(
     })
     .join("");
 
-  const chart = svg(
+  return svg(
     W,
     height,
     body,
     "Current open review assignments per person",
   );
-
-  const totalOpen = openPrs.length;
-  const unassigned = openPrs.filter((pr) => pr.assignees.length === 0).length;
-
-  return `<section>
-      <h2>Current assignments</h2>
-      <p class="section-hint">${totalOpen} open PRs right now${unassigned > 0 ? `, ${unassigned} unassigned` : ""}. Click a reviewer name to see their PRs.</p>
-      ${renderLegend()}
-      ${chart}
-    </section>`;
 }
 
 /** Wrap chart body in a responsive, accessible SVG. */
@@ -1329,6 +1307,20 @@ const STYLES = `
     .tab.active { color: var(--text); border-bottom-color: var(--accent); }
     .tab-panel.hidden { display: none; }
 
+    .sub-tabs {
+      display: flex; gap: 0.35rem; margin: 0 0 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .sub-tab {
+      appearance: none; border: none; background: none; color: var(--muted);
+      font: inherit; font-size: 0.82rem; font-weight: 600;
+      padding: 0.4rem 0.75rem; cursor: pointer;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .sub-tab:hover { color: var(--text); }
+    .sub-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    .sub-panel.hidden { display: none; }
+
     .table-search {
       width: 100%; max-width: 320px; margin: 0 0 0.85rem;
       padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 8px;
@@ -1387,6 +1379,10 @@ const STYLES = `
       flex: 1 1 180px; min-width: 180px;
       border: 1px solid var(--border); border-radius: 10px;
       padding: 0.9rem 1rem;
+    }
+    .strat-card-main {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
     }
     .strat-name {
       font-size: 0.9rem; font-weight: 650; margin-bottom: 0.5rem;

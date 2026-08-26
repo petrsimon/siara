@@ -1,6 +1,52 @@
-import type { Assignment, DifficultyBand, Override } from "../types.js";
+import type { Assignment, DifficultyBand, Override, ReviewResponse } from "../types.js";
 import type { DashboardMetrics } from "./index.js";
 import { computeGini } from "./gini.js";
+
+const prKey = (repo: string, pr: number): string => `${repo}#${pr}`;
+
+/**
+ * Assignment rows for the History chart: one entry per PR (last log row wins),
+ * plus GitHub review-request rows from the response report for merged PRs that
+ * never landed in the Siara log.
+ */
+export function historyAssignments(
+  assignments: Assignment[],
+  responses: ReviewResponse[] = [],
+): Assignment[] {
+  const byPr = new Map<string, Assignment>();
+  for (const a of assignments) {
+    byPr.set(prKey(a.repo, a.pr), a);
+  }
+
+  const grouped = new Map<string, ReviewResponse[]>();
+  for (const r of responses) {
+    const key = prKey(r.repo, r.pr);
+    const list = grouped.get(key) ?? [];
+    list.push(r);
+    grouped.set(key, list);
+  }
+
+  for (const [key, rows] of grouped) {
+    if (byPr.has(key)) continue;
+    const slash = key.indexOf("#");
+    const repo = key.slice(0, slash);
+    const pr = Number(key.slice(slash + 1));
+    const assignees = [...new Set(rows.map((r) => r.reviewer))].sort();
+    const earliest = rows.map((r) => r.assignedAt).sort()[0];
+    byPr.set(key, {
+      date: earliest?.slice(0, 10) ?? "",
+      repo,
+      pr,
+      assignees,
+      difficulty: 0,
+      band: "moderate",
+      rationale: "",
+      candidates: [],
+    });
+  }
+
+  return [...byPr.values()];
+}
 
 export function buildMetrics(
   assignments: Assignment[],

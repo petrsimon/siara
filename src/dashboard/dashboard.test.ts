@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Assignment, Override } from "../types.js";
-import { computeMetrics, generateDashboard } from "./index.js";
+import { computeMetrics, generateDashboard, historyAssignments } from "./index.js";
 
 function assignment(
   overrides: Partial<Assignment> & Pick<Assignment, "assignees" | "band">,
@@ -194,6 +194,38 @@ describe("computeMetrics", () => {
     ]);
     expect(metrics.weekByPerson.alice).toEqual({ "2026-01-12": 2 });
     expect(metrics.weekByPerson.bob).toEqual({ "2026-01-19": 1 });
+  });
+});
+
+describe("historyAssignments", () => {
+  it("dedupes the log to one row per PR (last wins)", () => {
+    const rows = historyAssignments([
+      assignment({ assignees: ["alice"], band: "simple", pr: 1, date: "2026-01-01" }),
+      assignment({ assignees: ["bob"], band: "hard", pr: 1, date: "2026-01-15" }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.assignees).toEqual(["bob"]);
+    expect(rows[0]?.band).toBe("hard");
+  });
+
+  it("adds merged PRs from the response report when missing from the log", () => {
+    const rows = historyAssignments(
+      [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],
+      [
+        {
+          repo: "org/repo",
+          pr: 99,
+          reviewer: "carol",
+          assignedAt: "2026-08-01T00:00:00.000Z",
+          outstanding: false,
+          mergedAt: "2026-08-10T00:00:00.000Z",
+          mergeHours: 216,
+        },
+      ],
+    );
+    expect(rows).toHaveLength(2);
+    const merged = rows.find((r) => r.pr === 99);
+    expect(merged?.assignees).toEqual(["carol"]);
   });
 });
 
@@ -469,11 +501,65 @@ describe("generateDashboard", () => {
       generatedAtIso,
     });
     expect(html).toContain("No open PRs in the latest snapshot.");
-    expect(html).toContain("No review-latency data yet.");
+    expect(html).not.toContain("Response time");
     expect(html).toContain("No merged PRs with a known review-request time");
   });
 
-  it("renders per-reviewer response-time stats", () => {
+  it("combines current and history assignments in a tabbed section", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
+        assignment({ assignees: ["bob"], band: "simple", pr: 2 }),
+      ],
+      openPrs: {
+        takenAt: "2026-08-25T09:00:00.000Z",
+        prs: [
+          {
+            repo: "org/repo",
+            pr: 1,
+            title: "x",
+            author: "a",
+            assignees: ["alice"],
+            ageDays: 1,
+            band: "hard",
+            staleness: "normal",
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+    expect(html).toContain("Review assignments");
+    expect(html).toContain('data-subtab="assign-current"');
+    expect(html).toContain('data-subtab="assign-history"');
+    expect(html).toContain('id="assign-history"');
+    expect(html).not.toContain("<h2>Current assignments</h2>");
+    expect(html).not.toContain("<h2>Assignment history</h2>");
+  });
+
+  it("includes merged PRs from the response report in assignment history", () => {
+    const html = generateDashboard({
+      assignments: [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],
+      responseTimes: {
+        takenAt: "2026-08-25T10:00:00.000Z",
+        responses: [
+          {
+            repo: "org/repo",
+            pr: 99,
+            reviewer: "carol",
+            assignedAt: "2026-08-01T00:00:00.000Z",
+            outstanding: false,
+            mergedAt: "2026-08-10T00:00:00.000Z",
+            mergeHours: 216,
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+    expect(html).toContain("carol");
+    expect(html).toContain("merged PRs from GitHub");
+  });
+
+  it("renders time-to-merge from merged PR response data", () => {
     const html = generateDashboard({
       assignments: [assignment({ assignees: ["bob"], band: "hard", pr: 7 })],
       responseTimes: {
@@ -490,33 +576,15 @@ describe("generateDashboard", () => {
             mergedAt: "2026-08-25T00:00:00.000Z",
             mergeHours: 120,
           },
-          {
-            repo: "org/repo",
-            pr: 8,
-            reviewer: "carol",
-            assignedAt: "2026-08-20T00:00:00.000Z",
-            outstanding: true,
-            waitingHours: 120,
-          },
         ],
       },
       generatedAtIso,
     });
-    expect(html).toContain("Response time");
-    expect(html).toContain("Outstanding");
-    // bob's 48h latency → 2.0d; carol's 120h wait → 5.0d.
-    expect(html).toContain("2.0d");
-    expect(html).toContain("5.0d");
-    // Merge chart uses mergeHours — only bob's PR has merged (120h → 5d).
+    expect(html).not.toContain("Response time");
     expect(html).toContain("until the PR merged");
     expect(html).toContain("Box shows quartiles");
-    const merge = html.slice(html.indexOf("Time to merge"), html.indexOf("Response time"));
-    expect(merge).toContain("bob");
-    expect(merge).not.toContain("carol");
-    expect(merge).toContain("5d");
-    // Within the response section, carol is outstanding → sorted above bob.
-    const section = html.slice(html.indexOf("Response time"));
-    expect(section.indexOf("carol")).toBeLessThan(section.indexOf(">bob<"));
+    expect(html).toContain("bob");
+    expect(html).toContain("5d");
   });
 
   it("shows PR difficulty metadata in the manual-override row", () => {

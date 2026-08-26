@@ -120,18 +120,24 @@ async function main(): Promise<void> {
     const maxLoad = Math.max(0, ...loads);
     const minLoad = loads.length > 0 ? Math.min(...loads) : 0;
 
-    // Agreement with siara baseline.
-    let agreesWithSiara = 0;
+    // Agreement with the primary Siara strategy (siara-v2 when present).
+    const baseline: StrategyName = (ALL_STRATEGIES as readonly string[]).includes(
+      "siara-v2",
+    )
+      ? ("siara-v2" as StrategyName)
+      : "siara";
+    let agreesWithBaseline = 0;
     for (const row of rows) {
+      const ref = row.picks[baseline] ?? row.picks.siara;
       if (
-        row.picks[s].length === row.picks.siara.length &&
-        row.picks[s].every((l) => row.picks.siara.includes(l))
+        row.picks[s].length === ref.length &&
+        row.picks[s].every((l) => ref.includes(l))
       ) {
-        agreesWithSiara++;
+        agreesWithBaseline++;
       }
     }
     const agreementPct =
-      rows.length > 0 ? Math.round((agreesWithSiara / rows.length) * 100) : 100;
+      rows.length > 0 ? Math.round((agreesWithBaseline / rows.length) * 100) : 100;
 
     return {
       strategy: s,
@@ -216,6 +222,9 @@ function renderReport(
   dir: ReviewerDir,
 ): string {
   const strategies = ALL_STRATEGIES;
+  const baseline: StrategyName = (strategies as readonly string[]).includes("siara-v2")
+    ? ("siara-v2" as StrategyName)
+    : "siara";
 
   // KPI cards.
   const kpis = metrics
@@ -228,7 +237,7 @@ function renderReport(
         <div class="kpi"><span class="kpi-label">Reviewers</span><span class="kpi-value">${m.activeReviewers}</span></div>
         <div class="kpi"><span class="kpi-label">Max load</span><span class="kpi-value">${m.maxLoad}</span></div>
         <div class="kpi"><span class="kpi-label">Min load</span><span class="kpi-value">${m.minLoad}</span></div>
-        <div class="kpi"><span class="kpi-label">Agrees w/ Siara</span><span class="kpi-value">${m.agreementPct}%</span></div>
+        <div class="kpi"><span class="kpi-label">Agrees w/ siara-v2</span><span class="kpi-value">${m.agreementPct}%</span></div>
       </div>
     </div>`,
     )
@@ -301,10 +310,11 @@ function renderReport(
       const cells = strategies
         .map((s) => {
           const pick = row.picks[s];
+          const ref = row.picks[baseline] ?? row.picks.siara;
           const isSame =
-            pick.length === row.picks.siara.length &&
-            pick.every((l) => row.picks.siara.includes(l));
-          const cls = s === "siara" ? "" : isSame ? "same" : "diff";
+            s === baseline ||
+            (pick.length === ref.length && pick.every((l) => ref.includes(l)));
+          const cls = s === baseline ? "" : isSame ? "same" : "diff";
           return `<td class="${cls}">${pick.map((l) => esc(dn(l, dir))).join(", ") || "—"}</td>`;
         })
         .join("");
@@ -335,7 +345,7 @@ ${STYLES}
 
     <section>
       <h2>Aggregate metrics</h2>
-      <p class="hint">Lower Gini = more even workload distribution. Agreement = how often this strategy picks the same reviewer as Siara.</p>
+      <p class="hint">Lower Gini = more even workload distribution. Agreement = how often this strategy picks the same reviewer as siara-v2 (or siara when v2 is absent).</p>
       <div class="kpi-grid">${kpis}</div>
     </section>
 
@@ -352,7 +362,7 @@ ${STYLES}
 
     <section>
       <h2>Per-PR picks</h2>
-      <p class="hint">Green = same as Siara, red = different pick. Hover PR for title.</p>
+      <p class="hint">Green = same as siara-v2, red = different pick. Hover PR for title.</p>
       <div class="scroll-x">
       <table>
         <thead>
