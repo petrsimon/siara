@@ -149,20 +149,25 @@ function renderHistogram(
   
   const maxCount = Math.max(...bins.map(b => b.count));
   
-  // Draw bars
-  const bars = bins.map((bin, i) => {
+  // Draw bars with labels underneath
+  const barsAndLabels = bins.map((bin, i) => {
     const x = padL + (i / binCount) * plotW;
     const barW = plotW / binCount - 2;
     const barH = (bin.count / maxCount) * plotH;
     const y = padT + plotH - barH;
+    const centerX = x + barW / 2;
     
-    return `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(barW)}" height="${fmt(barH)}" fill="var(--accent)" fill-opacity="0.7" rx="2"><title>${bin.min.toFixed(1)}–${bin.max.toFixed(1)}d: ${bin.count} PRs</title></rect>`;
-  }).join("");
-  
-  // X-axis ticks
-  const xTicks = [minAge, maxAge].map(val => {
-    const x = padL + ((val - minAge) / range) * plotW;
-    return `<text x="${fmt(x)}" y="${H - 12}" class="svg-tick" text-anchor="middle">${val.toFixed(0)}d</text>`;
+    const bar = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(barW)}" height="${fmt(barH)}" fill="var(--accent)" fill-opacity="0.7" rx="2"><title>${bin.min.toFixed(1)}–${bin.max.toFixed(1)}d: ${bin.count} PRs</title></rect>`;
+    
+    // Label: show range under each bar (rotate if bins are narrow)
+    const labelText = `${Math.round(bin.min)}-${Math.round(bin.max)}`;
+    const needsRotation = barW < 30; // Rotate labels if bars are too narrow
+    
+    const label = needsRotation
+      ? `<text x="${fmt(centerX)}" y="${H - 8}" class="svg-tick" text-anchor="end" transform="rotate(-45 ${fmt(centerX)} ${H - 8})" style="font-size: 9px">${labelText}</text>`
+      : `<text x="${fmt(centerX)}" y="${H - 12}" class="svg-tick" text-anchor="middle" style="font-size: 9px">${labelText}</text>`;
+    
+    return bar + label;
   }).join("");
   
   // Y-axis ticks (count)
@@ -207,7 +212,7 @@ function renderHistogram(
     </g>
   `;
   
-  return svg(W, H, axes + bars + markers.join("") + xTicks + yTicks + legend, title);
+  return svg(W, H, axes + barsAndLabels + markers.join("") + yTicks + legend, title);
 }
 
 /**
