@@ -1,6 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { renderAgeDistribution, renderDifficultyAgeScatter, renderWaitingDistribution } from "./charts.js";
-import type { OpenPrSnapshot } from "../types.js";
+import { renderAgeDistribution, renderDifficultyAgeScatter, renderMergeTimeDistribution } from "./charts.js";
+import type { OpenPrSnapshot, ReviewResponse } from "../types.js";
+
+function merged(reviewer: string, mergeHours: number, pr: number): ReviewResponse {
+  return {
+    repo: "org/repo",
+    pr,
+    reviewer,
+    assignedAt: "2026-08-20T00:00:00.000Z",
+    outstanding: false,
+    mergedAt: "2026-09-01T00:00:00.000Z",
+    mergeHours,
+  };
+}
 
 describe("charts", () => {
   describe("renderAgeDistribution", () => {
@@ -78,63 +90,96 @@ describe("charts", () => {
     });
   });
 
-  describe("renderWaitingDistribution", () => {
-    it("should render empty state when no PRs", () => {
-      const html = renderWaitingDistribution([], {});
-      expect(html).toContain("No open PRs with a known age");
+  describe("renderMergeTimeDistribution", () => {
+    it("should render empty state when no merged PRs", () => {
+      const html = renderMergeTimeDistribution([], {}, 90);
+      expect(html).toContain("No merged PRs with a known review-request time in the last 90 days");
     });
 
     it("should render box plots for each reviewer", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/repo", pr: 1, title: "PR 1", author: "alice", assignees: ["bob"], ageDays: 5, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 2, title: "PR 2", author: "alice", assignees: ["bob"], ageDays: 10, band: "moderate", staleness: "normal" },
-        { repo: "org/repo", pr: 3, title: "PR 3", author: "alice", assignees: ["bob"], ageDays: 15, band: "hard", staleness: "warning" },
-        { repo: "org/repo", pr: 4, title: "PR 4", author: "bob", assignees: ["carol"], ageDays: 2, band: "simple", staleness: "normal" },
+      const responses = [
+        merged("bob", 5 * 24, 1),
+        merged("bob", 10 * 24, 2),
+        merged("bob", 15 * 24, 3),
+        merged("carol", 2 * 24, 4),
       ];
       const dir = {
         bob: { name: "Bob Smith", email: "bob@example.com" },
         carol: { name: "Carol Jones", email: "carol@example.com" },
       };
-      const html = renderWaitingDistribution(prs, dir);
-      
-      expect(html).toContain("Waiting on reviewers");
+      const html = renderMergeTimeDistribution(responses, dir);
+
+      expect(html).toContain("Time to merge");
+      expect(html).toContain("until the PR merged");
       expect(html).toContain("Bob Smith");
       expect(html).toContain("Carol Jones");
       expect(html).toContain("Box shows quartiles");
-      // Should have box plots (rectangles)
       expect(html).toContain("<rect");
     });
 
-    it("should show outliers as separate points", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/repo", pr: 1, title: "PR 1", author: "alice", assignees: ["bob"], ageDays: 1, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 2, title: "PR 2", author: "alice", assignees: ["bob"], ageDays: 2, band: "moderate", staleness: "normal" },
-        { repo: "org/repo", pr: 3, title: "PR 3", author: "alice", assignees: ["bob"], ageDays: 3, band: "hard", staleness: "normal" },
-        { repo: "org/repo", pr: 4, title: "PR 4", author: "alice", assignees: ["bob"], ageDays: 4, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 5, title: "PR 5", author: "alice", assignees: ["bob"], ageDays: 100, band: "simple", staleness: "overdue" },
-      ];
-      const html = renderWaitingDistribution(prs, {});
-      
-      // Should have outlier circles
-      expect(html).toContain("circle");
-      expect(html).toContain("outlier");
+    it("should surface the window caveat", () => {
+      const html = renderMergeTimeDistribution([merged("bob", 24, 1)], {}, 45);
+      expect(html).toContain("last 45 days");
     });
 
-    it("should sort reviewers by longest wait", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/repo", pr: 1, title: "PR 1", author: "alice", assignees: ["bob"], ageDays: 10, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 2, title: "PR 2", author: "alice", assignees: ["carol"], ageDays: 50, band: "moderate", staleness: "overdue" },
-        { repo: "org/repo", pr: 3, title: "PR 3", author: "alice", assignees: ["dave"], ageDays: 5, band: "hard", staleness: "normal" },
+    it("should show outliers as separate points", () => {
+      const responses = [
+        merged("bob", 1 * 24, 1),
+        merged("bob", 2 * 24, 2),
+        merged("bob", 3 * 24, 3),
+        merged("bob", 4 * 24, 4),
+        merged("bob", 100 * 24, 5),
       ];
-      const html = renderWaitingDistribution(prs, {});
-      
+      const html = renderMergeTimeDistribution(responses, {});
+
+      expect(html).toContain("circle");
+      expect(html).toContain("outlier");
+      expect(html).toContain("100d (outlier)");
+    });
+
+    it("should sort reviewers by slowest median", () => {
+      const responses = [
+        merged("bob", 10 * 24, 1),
+        merged("carol", 50 * 24, 2),
+        merged("dave", 5 * 24, 3),
+      ];
+      const html = renderMergeTimeDistribution(responses, {});
+
       // Carol (50d) should appear before Bob (10d) and Dave (5d)
       const carolIdx = html.indexOf("carol");
       const bobIdx = html.indexOf("bob");
       const daveIdx = html.indexOf("dave");
-      
+
       expect(carolIdx).toBeLessThan(bobIdx);
       expect(bobIdx).toBeLessThan(daveIdx);
+    });
+
+    it("should ignore responses without a merge time", () => {
+      const responses: ReviewResponse[] = [
+        {
+          repo: "org/repo",
+          pr: 1,
+          reviewer: "bob",
+          assignedAt: "2026-08-20T00:00:00.000Z",
+          firstReviewAt: "2026-08-21T00:00:00.000Z",
+          latencyHours: 24,
+          outstanding: false,
+        },
+        {
+          repo: "org/repo",
+          pr: 2,
+          reviewer: "carol",
+          assignedAt: "2026-08-20T00:00:00.000Z",
+          outstanding: true,
+          waitingHours: 48,
+        },
+        merged("dave", 24, 3),
+      ];
+      const html = renderMergeTimeDistribution(responses, {});
+
+      expect(html).toContain("dave");
+      expect(html).not.toContain("bob");
+      expect(html).not.toContain("carol");
     });
   });
 });

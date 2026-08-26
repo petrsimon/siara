@@ -452,11 +452,8 @@ describe("generateDashboard", () => {
     // PR cell is a link to the GitHub PR, shown as repo/number (not repo#number).
     expect(html).toContain('href="https://github.com/org/repo/pull/7"');
     expect(html).toContain(">repo/7</a>");
-    expect(html).toContain("Waiting on reviewers");
-    // Box plot visualization (replaced table)
-    expect(html).toContain("Box shows quartiles");
-    // Box plot SVG elements
-    expect(html).toContain("<rect"); // Box plot boxes
+    expect(html).toContain("Time to merge");
+    expect(html).toContain("No merged PRs with a known review-request time");
     // Open-PRs table is sortable and searchable.
     expect(html).toContain('id="open-prs-table"');
     expect(html).toContain('class="sortable"');
@@ -473,6 +470,7 @@ describe("generateDashboard", () => {
     });
     expect(html).toContain("No open PRs in the latest snapshot.");
     expect(html).toContain("No review-latency data yet.");
+    expect(html).toContain("No merged PRs with a known review-request time");
   });
 
   it("renders per-reviewer response-time stats", () => {
@@ -489,6 +487,8 @@ describe("generateDashboard", () => {
             firstReviewAt: "2026-08-22T00:00:00.000Z",
             latencyHours: 48,
             outstanding: false,
+            mergedAt: "2026-08-25T00:00:00.000Z",
+            mergeHours: 120,
           },
           {
             repo: "org/repo",
@@ -507,6 +507,13 @@ describe("generateDashboard", () => {
     // bob's 48h latency → 2.0d; carol's 120h wait → 5.0d.
     expect(html).toContain("2.0d");
     expect(html).toContain("5.0d");
+    // Merge chart uses mergeHours — only bob's PR has merged (120h → 5d).
+    expect(html).toContain("until the PR merged");
+    expect(html).toContain("Box shows quartiles");
+    const merge = html.slice(html.indexOf("Time to merge"), html.indexOf("Response time"));
+    expect(merge).toContain("bob");
+    expect(merge).not.toContain("carol");
+    expect(merge).toContain("5d");
     // Within the response section, carol is outstanding → sorted above bob.
     const section = html.slice(html.indexOf("Response time"));
     expect(section.indexOf("carol")).toBeLessThan(section.indexOf(">bob<"));

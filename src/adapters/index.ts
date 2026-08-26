@@ -11,9 +11,36 @@ import type {
   ReviewHistoryQuery,
 } from "../types.js";
 
+/** One GitHub timeline event that requested or un-requested a user reviewer. */
+export interface ReviewRequestEvent {
+  pr: number;
+  login: string;
+  /** ISO timestamp of the event. */
+  at: string;
+  kind: "requested" | "removed";
+}
+
+/** A PR that merged within the lookback window — powers time-to-merge stats. */
+export interface MergedPullRequest {
+  number: number;
+  author: string;
+  /** ISO timestamp the PR was merged. */
+  mergedAt: string;
+}
+
 export interface GitHubAdapter {
   /** Open PRs for a repo that need assignment. */
   listOpenPullRequests(repo: string): Promise<PullRequest[]>;
+  /** PRs merged on/after `sinceIso` — for reviewer time-to-merge stats. */
+  listRecentlyMergedPullRequests(
+    repo: string,
+    sinceIso: string,
+  ): Promise<MergedPullRequest[]>;
+  /** Timeline of user review-request / request-removed events for the given PRs. */
+  getReviewRequestEvents(
+    repo: string,
+    prNumbers: number[],
+  ): Promise<ReviewRequestEvent[]>;
   /** Per-file diff stats for a PR. */
   getPullRequestFiles(repo: string, prNumber: number): Promise<PullRequest["files"]>;
   /** Commit counts on given paths per author within the sync window. */

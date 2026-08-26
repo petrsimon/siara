@@ -29,6 +29,7 @@ Usage:
   siara daily [--no-sync] [--no-post]   Assign reviewers for pending PRs
   siara shadow [--no-sync]    Compute + log recommendations; post nothing (shadow mode)
   siara dry-run [--no-sync]   Score pending PRs without side effects
+  siara backfill          Score all current open PRs to populate difficulty bands
   siara dashboard [--out <file>]   Generate HTML dashboard (default: ./dashboard.html)
   siara admin [--port <n>]    Local editable reviewer admin page (default: 4319)
   siara --help            Show this help
@@ -135,11 +136,13 @@ async function main(): Promise<void> {
     // so a missing/invalid config degrades to logins + default thresholds.
     let reviewers: Record<string, { name?: string; email?: string }> | undefined;
     let staleness: { warningDays: number; overdueDays: number } | undefined;
+    let windowDays: number | undefined;
     let algorithm: Parameters<typeof generateDashboard>[0]["algorithm"];
     try {
       const { teamConfig } = loadConfig();
       reviewers = teamConfig.reviewers;
       staleness = teamConfig.staleness;
+      windowDays = teamConfig.syncWindowDays;
       // Surface the live scoring knobs so the "How it works" doc can't drift.
       algorithm = {
         reviewersPerPr: teamConfig.reviewersPerPr,
@@ -173,6 +176,7 @@ async function main(): Promise<void> {
       responseTimes,
       reviewers,
       staleness,
+      windowDays,
       algorithm,
       strategyComparison,
       generatedAtIso: nowIso,
@@ -301,6 +305,14 @@ async function main(): Promise<void> {
             console.log(`  ${a.rationale}`);
           }
         }
+        break;
+      }
+      case "backfill": {
+        const { backfill } = await import("./runtime/backfill.js");
+        console.log("Scoring all current open PRs...");
+        const result = await backfill(deps, nowIso);
+        console.log(`Backfill complete: ${result.scored} PRs scored, ${result.alreadyScored} already had difficulty bands`);
+        console.log(`Total open PRs: ${result.totalPrs}`);
         break;
       }
       default:

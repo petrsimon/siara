@@ -4,6 +4,10 @@ import {
   parseJiraKey,
   parsePullRequests,
   parseReviewHistory,
+  parseReviewRequestTimeline,
+  openRequestStartedAt,
+  firstRequestedAt,
+  parseMergedPullRequests,
   tallyCommitsByLogin,
 } from "./github.js";
 
@@ -151,5 +155,92 @@ describe("parseReviewHistory", () => {
     ]);
     expect(history.bob).toBeUndefined();
     expect(history.carol).toBeUndefined();
+  });
+});
+
+describe("parseReviewRequestTimeline", () => {
+  it("keeps user request/remove events and skips teams", () => {
+    const events = parseReviewRequestTimeline(7, {
+      timelineItems: {
+        nodes: [
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            requestedReviewer: { __typename: "User", login: "bob" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-01-02T00:00:00.000Z",
+            requestedReviewer: { __typename: "Team", login: null },
+          },
+          {
+            __typename: "ReviewRequestRemovedEvent",
+            createdAt: "2026-01-03T00:00:00.000Z",
+            requestedReviewer: { __typename: "User", login: "bob" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-01-04T00:00:00.000Z",
+            requestedReviewer: { __typename: "User", login: "carol" },
+          },
+        ],
+      },
+    });
+
+    expect(events).toEqual([
+      { pr: 7, login: "bob", at: "2026-01-01T00:00:00.000Z", kind: "requested" },
+      { pr: 7, login: "bob", at: "2026-01-03T00:00:00.000Z", kind: "removed" },
+      { pr: 7, login: "carol", at: "2026-01-04T00:00:00.000Z", kind: "requested" },
+    ]);
+  });
+});
+
+describe("openRequestStartedAt", () => {
+  it("uses the latest still-open request per reviewer", () => {
+    const starts = openRequestStartedAt([
+      { pr: 1, login: "bob", at: "2026-01-01T00:00:00.000Z", kind: "requested" },
+      { pr: 1, login: "bob", at: "2026-01-10T00:00:00.000Z", kind: "removed" },
+      { pr: 1, login: "bob", at: "2026-01-20T00:00:00.000Z", kind: "requested" },
+      { pr: 1, login: "carol", at: "2026-01-01T00:00:00.000Z", kind: "requested" },
+      { pr: 1, login: "carol", at: "2026-01-02T00:00:00.000Z", kind: "removed" },
+    ]);
+
+    expect(starts.get("1\0bob")).toBe("2026-01-20T00:00:00.000Z");
+    expect(starts.get("1\0carol")).toBeUndefined();
+  });
+});
+
+describe("firstRequestedAt", () => {
+  it("keeps the earliest requested time per reviewer, ignoring removals", () => {
+    const starts = firstRequestedAt([
+      { pr: 1, login: "bob", at: "2026-01-20T00:00:00.000Z", kind: "requested" },
+      { pr: 1, login: "bob", at: "2026-01-01T00:00:00.000Z", kind: "requested" },
+      { pr: 1, login: "bob", at: "2026-01-10T00:00:00.000Z", kind: "removed" },
+      { pr: 2, login: "carol", at: "2026-02-05T00:00:00.000Z", kind: "requested" },
+    ]);
+
+    expect(starts.get("1\0bob")).toBe("2026-01-01T00:00:00.000Z");
+    expect(starts.get("2\0carol")).toBe("2026-02-05T00:00:00.000Z");
+  });
+});
+
+describe("parseMergedPullRequests", () => {
+  it("maps number/author/mergedAt and skips rows without a merge time", () => {
+    const merged = parseMergedPullRequests([
+      { number: 7, author: { login: "alice" }, mergedAt: "2026-08-20T00:00:00.000Z" },
+      { number: 8, author: null, mergedAt: "2026-08-21T00:00:00.000Z" },
+      { number: 9, author: { login: "bob" }, mergedAt: null }, // not merged
+      { number: 10 }, // missing fields
+    ]);
+
+    expect(merged).toEqual([
+      { number: 7, author: "alice", mergedAt: "2026-08-20T00:00:00.000Z" },
+      { number: 8, author: "unknown", mergedAt: "2026-08-21T00:00:00.000Z" },
+    ]);
+  });
+
+  it("returns [] for non-array input", () => {
+    expect(parseMergedPullRequests(null)).toEqual([]);
+    expect(parseMergedPullRequests({})).toEqual([]);
   });
 });

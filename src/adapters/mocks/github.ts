@@ -1,4 +1,8 @@
-import type { GitHubAdapter } from "../index.js";
+import type {
+  GitHubAdapter,
+  MergedPullRequest,
+  ReviewRequestEvent,
+} from "../index.js";
 import type {
   PullRequest,
   RecentReview,
@@ -17,6 +21,10 @@ export interface GitHubMockFixture {
   reviewHistory?: Record<string, Record<string, RecentReview[]>>;
   /** Open review load keyed by login. */
   openReviewLoad?: Record<string, number>;
+  /** GitHub review-request timeline events keyed by repo. */
+  reviewRequestEvents?: Record<string, ReviewRequestEvent[]>;
+  /** Recently-merged PRs keyed by repo. */
+  mergedPullRequests?: Record<string, MergedPullRequest[]>;
 }
 
 export interface RecordedComment {
@@ -43,6 +51,16 @@ export class MockGitHubAdapter implements GitHubAdapter {
 
   async listOpenPullRequests(repo: string): Promise<PullRequest[]> {
     return this.fixture.openPullRequests?.[repo] ?? [];
+  }
+
+  async listRecentlyMergedPullRequests(
+    repo: string,
+    sinceIso: string,
+  ): Promise<MergedPullRequest[]> {
+    const since = sinceIso.slice(0, 10);
+    return (this.fixture.mergedPullRequests?.[repo] ?? []).filter(
+      (pr) => pr.mergedAt.slice(0, 10) >= since,
+    );
   }
 
   async getPullRequestFiles(
@@ -101,6 +119,16 @@ export class MockGitHubAdapter implements GitHubAdapter {
       result[login] = loads[login] ?? 0;
     }
     return result;
+  }
+
+  async getReviewRequestEvents(
+    repo: string,
+    prNumbers: number[],
+  ): Promise<ReviewRequestEvent[]> {
+    const wanted = new Set(prNumbers);
+    return (this.fixture.reviewRequestEvents?.[repo] ?? []).filter((ev) =>
+      wanted.has(ev.pr),
+    );
   }
 
   async postComment(

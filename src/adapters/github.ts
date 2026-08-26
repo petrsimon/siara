@@ -6,7 +6,11 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { GitHubAdapter } from "./index.js";
+import type {
+  GitHubAdapter,
+  MergedPullRequest,
+  ReviewRequestEvent,
+} from "./index.js";
 import type {
   FileChange,
   PullRequest,
@@ -21,6 +25,8 @@ const JIRA_KEY_RE = /[A-Z]+-\d+/;
 /** Hard ceiling on paginated PR pages per sync — backstop against a runaway walk. */
 const REVIEW_HISTORY_PAGE_CAP = 50;
 const REVIEW_HISTORY_PAGE_SIZE = 100;
+/** PRs per GraphQL timeline query — keeps the document under GitHub's cost cap. */
+const REVIEW_REQUEST_BATCH = 20;
 
 export interface GhCliOptions {
   /** When true, log write commands instead of executing them. */
@@ -204,6 +210,117 @@ export function parseReviewHistory(
   return result;
 }
 
+interface GqlRequestedReviewer {
+  __typename?: string;
+  login?: string | null;
+}
+
+interface GqlReviewRequestNode {
+  __typename?: string;
+  createdAt?: string;
+  requestedReviewer?: GqlRequestedReviewer | null;
+}
+
+interface GqlPullRequestTimeline {
+  timelineItems?: { nodes?: Array<GqlReviewRequestNode | null> | null } | null;
+}
+
+/** Map a GraphQL pullRequest timeline payload to user review-request events. */
+export function parseReviewRequestTimeline(
+  pr: number,
+  payload: unknown,
+): ReviewRequestEvent[] {
+  if (!payload || typeof payload !== "object") return [];
+  const nodes = (payload as GqlPullRequestTimeline).timelineItems?.nodes;
+  if (!Array.isArray(nodes)) return [];
+
+  const out: ReviewRequestEvent[] = [];
+  for (const node of nodes) {
+    if (!node || typeof node !== "object") continue;
+    const login = node.requestedReviewer?.login;
+    const at = node.createdAt;
+    if (typeof login !== "string" || login.length === 0) continue;
+    if (typeof at !== "string" || at.length === 0) continue;
+    const kind =
+      node.__typename === "ReviewRequestRemovedEvent" ? "removed" : "requested";
+    if (
+      node.__typename !== "ReviewRequestedEvent" &&
+      node.__typename !== "ReviewRequestRemovedEvent"
+    ) {
+      continue;
+    }
+    out.push({ pr, login, at, kind });
+  }
+  return out;
+}
+
+/**
+ * Latest still-open GitHub review request per PR+login.
+ * Key is `${pr}\0${login}` → ISO timestamp of the current request.
+ */
+export function openRequestStartedAt(
+  events: ReviewRequestEvent[],
+): Map<string, string> {
+  const byKey = new Map<string, ReviewRequestEvent[]>();
+  for (const ev of events) {
+    const key = `${ev.pr}\0${ev.login}`;
+    const list = byKey.get(key) ?? [];
+    list.push(ev);
+    byKey.set(key, list);
+  }
+  const out = new Map<string, string>();
+  for (const [key, list] of byKey) {
+    list.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    let openAt: string | undefined;
+    for (const ev of list) {
+      openAt = ev.kind === "requested" ? ev.at : undefined;
+    }
+    if (openAt !== undefined) out.set(key, openAt);
+  }
+  return out;
+}
+
+/**
+ * Earliest `requested` timestamp per `${pr}\0${login}`. Unlike
+ * `openRequestStartedAt` (which tracks the currently-open request), this keeps
+ * the first time a reviewer was ever requested — the assignment point for a PR
+ * that has since merged.
+ */
+export function firstRequestedAt(
+  events: ReviewRequestEvent[],
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const ev of events) {
+    if (ev.kind !== "requested") continue;
+    const key = `${ev.pr}\0${ev.login}`;
+    const prev = out.get(key);
+    if (prev === undefined || ev.at < prev) out.set(key, ev.at);
+  }
+  return out;
+}
+
+/** Parse `gh pr list --state merged --json number,author,mergedAt`. */
+export function parseMergedPullRequests(json: unknown): MergedPullRequest[] {
+  if (!Array.isArray(json)) return [];
+  const out: MergedPullRequest[] = [];
+  for (const item of json) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as {
+      number?: unknown;
+      author?: { login?: string | null } | null;
+      mergedAt?: unknown;
+    };
+    if (typeof raw.number !== "number") continue;
+    if (typeof raw.mergedAt !== "string" || raw.mergedAt.length === 0) continue;
+    out.push({
+      number: raw.number,
+      author: raw.author?.login ?? "unknown",
+      mergedAt: raw.mergedAt,
+    });
+  }
+  return out;
+}
+
 async function runGh(args: string[]): Promise<string> {
   const { stdout } = await execFile("gh", args, {
     maxBuffer: 16 * 1024 * 1024,
@@ -238,6 +355,28 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
       "number,headRefName,author,title,files,reviewRequests,createdAt",
     ]);
     return parsePullRequests(repo, JSON.parse(stdout) as unknown);
+  }
+
+  async listRecentlyMergedPullRequests(
+    repo: string,
+    sinceIso: string,
+  ): Promise<MergedPullRequest[]> {
+    const since = sinceIso.slice(0, 10);
+    const stdout = await runGh([
+      "pr",
+      "list",
+      "--repo",
+      repo,
+      "--state",
+      "merged",
+      "--search",
+      `merged:>=${since}`,
+      "--limit",
+      "500",
+      "--json",
+      "number,author,mergedAt",
+    ]);
+    return parseMergedPullRequests(JSON.parse(stdout) as unknown);
   }
 
   async getPullRequestFiles(
@@ -410,6 +549,60 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
       }
     }
     return result;
+  }
+
+  async getReviewRequestEvents(
+    repo: string,
+    prNumbers: number[],
+  ): Promise<ReviewRequestEvent[]> {
+    const slash = repo.indexOf("/");
+    if (slash <= 0 || prNumbers.length === 0) return [];
+    const owner = repo.slice(0, slash);
+    const name = repo.slice(slash + 1);
+    const unique = [...new Set(prNumbers)].filter((n) => Number.isInteger(n) && n > 0);
+    if (unique.length === 0) return [];
+
+    const out: ReviewRequestEvent[] = [];
+    const fragment = `
+            timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT], first: 100) {
+              nodes {
+                __typename
+                ... on ReviewRequestedEvent {
+                  createdAt
+                  requestedReviewer { __typename ... on User { login } }
+                }
+                ... on ReviewRequestRemovedEvent {
+                  createdAt
+                  requestedReviewer { __typename ... on User { login } }
+                }
+              }
+            }`;
+
+    for (let i = 0; i < unique.length; i += REVIEW_REQUEST_BATCH) {
+      const batch = unique.slice(i, i + REVIEW_REQUEST_BATCH);
+      const fields = batch
+        .map((n, idx) => `p${idx}: pullRequest(number: ${n}) { ${fragment} }`)
+        .join("\n");
+      const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { ${fields} } }`;
+      try {
+        const stdout = await runGh(["api", "graphql", "-f", `query=${query}`]);
+        const json = JSON.parse(stdout) as {
+          data?: { repository?: Record<string, GqlPullRequestTimeline | null> };
+        };
+        const repoPayload = json.data?.repository;
+        if (!repoPayload) continue;
+        for (let j = 0; j < batch.length; j++) {
+          const pr = batch[j];
+          if (pr === undefined) continue;
+          const payload = repoPayload[`p${j}`];
+          if (!payload) continue;
+          out.push(...parseReviewRequestTimeline(pr, payload));
+        }
+      } catch {
+        // Skip a failed batch rather than aborting the whole report.
+      }
+    }
+    return out;
   }
 
   async postComment(

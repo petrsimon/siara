@@ -333,6 +333,16 @@ describe("daily live", () => {
       reviewHistory: {
         [REPO]: { alice: [{ prNumber: 50, branch: "b", reviewedAt: "2026-08-22T10:00:00.000Z" }] },
       },
+      reviewRequestEvents: {
+        [REPO]: [
+          {
+            pr: 51,
+            login: "bob",
+            at: "2026-08-20T00:00:00.000Z",
+            kind: "requested",
+          },
+        ],
+      },
     });
     const deps = makeDeps(github, store);
 
@@ -350,6 +360,167 @@ describe("daily live", () => {
 
     expect(bob?.outstanding).toBe(true);
     expect(bob?.waitingHours).toBe(hoursBetween("2026-08-20T00:00:00.000Z", NOW));
+  });
+
+  it("measures outstanding wait from the GitHub review-request time", async () => {
+    const past = "2026-08-24";
+    await store.appendAssignment({
+      date: past,
+      repo: REPO,
+      pr: 51,
+      assignees: ["bob"],
+      difficulty: 0.5,
+      band: "moderate",
+      rationale: "x",
+      candidates: [],
+    });
+    const pending = pullRequest({
+      number: 51,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: ["bob"],
+    });
+    const githubRequestedAt = "2026-08-10T12:00:00.000Z";
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pending] },
+      reviewRequestEvents: {
+        [REPO]: [
+          { pr: 51, login: "bob", at: githubRequestedAt, kind: "requested" },
+        ],
+      },
+    });
+
+    await daily(makeDeps(github, store), NOW, { noSync: true });
+
+    const bob = (await store.readResponseReport())?.responses.find(
+      (r) => r.reviewer === "bob",
+    );
+    expect(bob?.outstanding).toBe(true);
+    expect(bob?.assignedAt).toBe(githubRequestedAt);
+    expect(bob?.waitingHours).toBe(hoursBetween(githubRequestedAt, NOW));
+  });
+
+  it("omits outstanding reviewers GitHub never requested", async () => {
+    await store.appendAssignment({
+      date: "2026-08-20",
+      repo: REPO,
+      pr: 51,
+      assignees: ["bob"],
+      difficulty: 0.5,
+      band: "moderate",
+      rationale: "x",
+      candidates: [],
+    });
+    const pending = pullRequest({
+      number: 51,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: ["bob"],
+    });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pending] },
+    });
+
+    await daily(makeDeps(github, store), NOW, { noSync: true });
+
+    const report = await store.readResponseReport();
+    expect(report?.responses.find((r) => r.reviewer === "bob")).toBeUndefined();
+  });
+
+  it("records time-to-merge for reviewers on a since-merged PR", async () => {
+    const requestedAt = "2026-08-15T09:00:00.000Z";
+    const mergedAt = "2026-08-20T09:00:00.000Z";
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [] },
+      mergedPullRequests: {
+        [REPO]: [{ number: 60, author: "author", mergedAt }],
+      },
+      reviewRequestEvents: {
+        [REPO]: [{ pr: 60, login: "bob", at: requestedAt, kind: "requested" }],
+      },
+    });
+
+    await daily(makeDeps(github, store), NOW, { noSync: true });
+
+    const bob = (await store.readResponseReport())?.responses.find(
+      (r) => r.reviewer === "bob" && r.pr === 60,
+    );
+    expect(bob?.mergedAt).toBe(mergedAt);
+    expect(bob?.assignedAt).toBe(requestedAt);
+    expect(bob?.mergeHours).toBe(hoursBetween(requestedAt, mergedAt));
+  });
+
+  it("omits merge time when GitHub never recorded the review request", async () => {
+    // Siara logged the assignment, but there is no GitHub review_requested
+    // event — so there is no real assignment time to measure merge from.
+    await store.appendAssignment({
+      date: "2026-08-14",
+      repo: REPO,
+      pr: 62,
+      assignees: ["bob"],
+      difficulty: 0.5,
+      band: "moderate",
+      rationale: "x",
+      candidates: [],
+    });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [] },
+      mergedPullRequests: {
+        [REPO]: [{ number: 62, author: "author", mergedAt: "2026-08-20T09:00:00.000Z" }],
+      },
+    });
+
+    await daily(makeDeps(github, store), NOW, { noSync: true });
+
+    const bob = (await store.readResponseReport())?.responses.find(
+      (r) => r.reviewer === "bob" && r.pr === 62,
+    );
+    expect(bob?.mergeHours).toBeUndefined();
+    expect(bob?.mergedAt).toBeUndefined();
+  });
+
+  it("overlays merge time onto a completed-review response", async () => {
+    const past = "2026-08-14";
+    await store.appendAssignment({
+      date: past,
+      repo: REPO,
+      pr: 61,
+      assignees: ["alice"],
+      difficulty: 0.5,
+      band: "moderate",
+      rationale: "x",
+      candidates: [],
+    });
+    const reviewedAt = "2026-08-16T10:00:00.000Z";
+    const requestedAt = "2026-08-15T09:00:00.000Z";
+    const mergedAt = "2026-08-18T09:00:00.000Z";
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [] },
+      reviewHistory: {
+        [REPO]: { alice: [{ prNumber: 61, branch: "b", reviewedAt }] },
+      },
+      reviewRequestEvents: {
+        [REPO]: [{ pr: 61, login: "alice", at: requestedAt, kind: "requested" }],
+      },
+      mergedPullRequests: {
+        [REPO]: [{ number: 61, author: "author", mergedAt }],
+      },
+    });
+
+    await daily(makeDeps(github, store), NOW);
+
+    const responses = (await store.readResponseReport())?.responses.filter(
+      (r) => r.reviewer === "alice" && r.pr === 61,
+    );
+    // Single response for the pair — merge fields overlaid, not duplicated.
+    expect(responses).toHaveLength(1);
+    const alice = responses?.[0];
+    // Merge overlay re-anchors the record to the real GitHub request time,
+    // overriding the assignment-log date and recomputing latency from it.
+    expect(alice?.assignedAt).toBe(requestedAt);
+    expect(alice?.latencyHours).toBe(hoursBetween(requestedAt, reviewedAt));
+    expect(alice?.mergedAt).toBe(mergedAt);
+    expect(alice?.mergeHours).toBe(hoursBetween(requestedAt, mergedAt));
   });
 });
 

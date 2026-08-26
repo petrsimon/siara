@@ -3,7 +3,7 @@
  * Rendered as inline SVG in the dashboard.
  */
 
-import type { DifficultyBand, OpenPrSnapshot } from "../types.js";
+import type { DifficultyBand, OpenPrSnapshot, ReviewResponse } from "../types.js";
 import { escapeHtml } from "./html.js";
 
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -328,32 +328,38 @@ Age: ${pr.ageDays}d</title></circle>`;
     </section>`;
 }
 
+/** Days as a compact tick/tooltip label: 5, 1.5, … */
+function fmtDays(d: number): string {
+  const rounded = Math.round(d * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
 /**
- * Per-reviewer waiting time distribution as horizontal box plots.
+ * Per-reviewer time-to-merge distribution as horizontal box plots.
  * Each reviewer gets a box showing: min, Q1, median, Q3, max, outliers.
+ * Value is days from when the reviewer was requested until the PR merged.
  */
-export function renderWaitingDistribution(
-  openPrs: OpenPrSnapshot[],
-  dir: Record<string, { name?: string; email?: string }>
+export function renderMergeTimeDistribution(
+  responses: ReviewResponse[],
+  dir: Record<string, { name?: string; email?: string }>,
+  windowDays = 90
 ): string {
   const byReviewer = new Map<string, number[]>();
-  for (const pr of openPrs) {
-    if (pr.ageDays === undefined) continue;
-    for (const login of pr.assignees) {
-      const list = byReviewer.get(login) ?? [];
-      list.push(pr.ageDays);
-      byReviewer.set(login, list);
-    }
+  for (const r of responses) {
+    if (r.mergeHours === undefined) continue;
+    const list = byReviewer.get(r.reviewer) ?? [];
+    list.push(r.mergeHours / 24);
+    byReviewer.set(r.reviewer, list);
   }
 
   if (byReviewer.size === 0) {
-    return `<section><h2>Waiting on reviewers</h2><p class="empty">No open PRs with a known age.</p></section>`;
+    return `<section><h2>Time to merge</h2><p class="empty">No merged PRs with a known review-request time in the last ${windowDays} days.</p></section>`;
   }
 
-  // Sort reviewers by max age (longest wait first)
+  // Sort reviewers by median time-to-merge (slowest first)
   const reviewers = [...byReviewer.entries()]
     .map(([login, ages]) => ({ login, ages }))
-    .sort((a, b) => Math.max(...b.ages) - Math.max(...a.ages));
+    .sort((a, b) => quartiles(b.ages).median - quartiles(a.ages).median);
   
   const W = 640;
   const rowH = 32;
@@ -364,8 +370,9 @@ export function renderWaitingDistribution(
   const plotW = W - labelW - padR;
   const H = reviewers.length * rowH + padT + padB;
   
-  // Find global max for consistent scale
-  const globalMax = Math.max(...reviewers.flatMap(r => r.ages));
+  // Find global max for consistent scale (avoid divide-by-zero if all waits are 0).
+  const rawMax = Math.max(...reviewers.flatMap(r => r.ages));
+  const globalMax = rawMax > 0 ? rawMax : 1;
   
   const boxes = reviewers.map((r, i) => {
     const stats = quartiles(r.ages);
@@ -385,7 +392,7 @@ export function renderWaitingDistribution(
       .filter(a => a < stats.lowerFence || a > stats.upperFence)
       .map(a => {
         const cx = x(a);
-        return `<circle cx="${fmt(cx)}" cy="${centerY}" r="2.5" fill="var(--band-hard)" fill-opacity="0.8"><title>${escapeHtml(displayName(r.login, dir))}: ${a}d (outlier)</title></circle>`;
+        return `<circle cx="${fmt(cx)}" cy="${centerY}" r="2.5" fill="var(--band-hard)" fill-opacity="0.8"><title>${escapeHtml(displayName(r.login, dir))}: ${fmtDays(a)}d (outlier)</title></circle>`;
       })
       .join("");
     
@@ -399,7 +406,7 @@ export function renderWaitingDistribution(
     const boxW = x(stats.q3) - boxX;
     const box = `<rect x="${fmt(boxX)}" y="${boxY}" width="${fmt(boxW)}" height="${boxH}" fill="var(--accent)" fill-opacity="0.3" stroke="var(--accent)" stroke-width="1.5" rx="2"><title>${escapeHtml(displayName(r.login, dir))}
 Q1: ${stats.q1.toFixed(1)}d, Median: ${stats.median.toFixed(1)}d, Q3: ${stats.q3.toFixed(1)}d
-${r.ages.length} open PRs</title></rect>`;
+${r.ages.length} merged</title></rect>`;
     
     // Median line
     const medX = x(stats.median);
@@ -412,20 +419,20 @@ ${r.ages.length} open PRs</title></rect>`;
   }).join("");
   
   // X-axis ticks
-  const tickVals = [0, Math.round(globalMax / 4), Math.round(globalMax / 2), Math.round(3 * globalMax / 4), globalMax];
+  const tickVals = [0, globalMax / 4, globalMax / 2, (3 * globalMax) / 4, globalMax];
   const xTicks = tickVals.map(val => {
     const tickX = labelW + (val / globalMax) * plotW;
-    return `<text x="${fmt(tickX)}" y="${H - 10}" class="svg-tick" text-anchor="middle">${val}d</text>`;
+    return `<text x="${fmt(tickX)}" y="${H - 10}" class="svg-tick" text-anchor="middle">${fmtDays(val)}d</text>`;
   }).join("");
   
   // Axis line
   const axis = `<line x1="${labelW}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="var(--border)" stroke-width="1"/>`;
   
-  const chart = svg(W, H, boxes + axis + xTicks, "Waiting time distribution per reviewer");
-  
+  const chart = svg(W, H, boxes + axis + xTicks, "Time-to-merge distribution per reviewer");
+
   return `<section>
-      <h2>Waiting on reviewers</h2>
-      <p class="section-hint">Distribution of PR ages (days since PR created) for each reviewer's current assignments. Box shows quartiles (median = thick line), whiskers extend to 1.5×IQR, outliers shown as dots. Sorted by longest wait.</p>
+      <h2>Time to merge</h2>
+      <p class="section-hint">Distribution of days from GitHub requesting the review until the PR merged, per reviewer. Box shows quartiles (median = thick line), whiskers extend to 1.5×IQR, outliers shown as dots. Sorted by slowest median. <strong>Only covers PRs merged in the last ${windowDays} days</strong> — history deepens as Siara keeps running.</p>
       ${chart}
     </section>`;
 }

@@ -3,7 +3,7 @@ import type { DashboardInput, DashboardMetrics, StrategyComparison, StrategyComp
 import type { StrategyName } from "../scoring/pickReviewers.js";
 import { buildMetrics } from "./metrics.js";
 import { escapeHtml } from "./html.js";
-import { renderAgeDistribution, renderDifficultyAgeScatter, renderWaitingDistribution, CHART_STYLES } from "./charts.js";
+import { renderAgeDistribution, renderDifficultyAgeScatter, renderMergeTimeDistribution, CHART_STYLES } from "./charts.js";
 
 const BANDS = ["simple", "moderate", "hard"] as const;
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -42,7 +42,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const heatmap = renderHeatmap(input.assignments, dir);
   const sankeySection = renderSankey(metrics, dir);
   const openPrs = input.openPrs?.prs ?? [];
-  const waitingSection = renderWaitingDistribution(openPrs, dir);
+  const waitingSection = renderMergeTimeDistribution(input.responseTimes?.responses ?? [], dir, input.windowDays);
   const responseSection = renderResponseSection(input.responseTimes?.responses ?? [], dir);
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);

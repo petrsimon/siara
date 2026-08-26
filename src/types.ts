@@ -197,8 +197,8 @@ export interface Assignment {
 
 /**
  * A point-in-time record of one open PR, emitted by `daily` into a git-tracked
- * snapshot each run. Powers the dashboard's PR-age overview and per-reviewer
- * waiting stats without needing config or the SQLite store at dashboard time.
+ * snapshot each run. Powers the dashboard's PR-age overview without needing
+ * config or the SQLite store at dashboard time.
  */
 export interface OpenPrSnapshot {
   repo: string;
@@ -234,7 +234,8 @@ export interface ReviewResponse {
   repo: string;
   pr: number;
   reviewer: string;
-  /** ISO timestamp Siara assigned this reviewer (assignment-log date, midnight UTC). */
+  /** ISO timestamp GitHub requested this reviewer (`review_requested`).
+   *  Completed reviews may fall back to the Siara assignment-log date. */
   assignedAt: string;
   /** ISO timestamp of their first review on/after assignedAt, if any. */
   firstReviewAt?: string;
@@ -244,6 +245,10 @@ export interface ReviewResponse {
   outstanding: boolean;
   /** Whole hours from assignedAt to now (present iff outstanding). */
   waitingHours?: number;
+  /** ISO timestamp the PR merged, for reviewers requested on a since-merged PR. */
+  mergedAt?: string;
+  /** Whole hours from assignedAt to mergedAt (present iff the PR has merged). */
+  mergeHours?: number;
 }
 
 /** Review-latency report: point-in-time, overwritten each `daily` run. */

@@ -12,7 +12,11 @@
  */
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import type { GitHubAdapter } from "./index.js";
+import type {
+  GitHubAdapter,
+  MergedPullRequest,
+  ReviewRequestEvent,
+} from "./index.js";
 import type {
   PullRequest,
   ReviewHistoryPage,
@@ -164,6 +168,13 @@ export class LocalGitGitHubAdapter implements GitHubAdapter {
     return this.base.listOpenPullRequests(repo);
   }
 
+  listRecentlyMergedPullRequests(
+    repo: string,
+    sinceIso: string,
+  ): Promise<MergedPullRequest[]> {
+    return this.base.listRecentlyMergedPullRequests(repo, sinceIso);
+  }
+
   getPullRequestFiles(repo: string, prNumber: number): Promise<PullRequest["files"]> {
     return this.base.getPullRequestFiles(repo, prNumber);
   }
@@ -174,6 +185,13 @@ export class LocalGitGitHubAdapter implements GitHubAdapter {
 
   getOpenReviewLoad(logins: string[]): Promise<Record<string, number>> {
     return this.base.getOpenReviewLoad(logins);
+  }
+
+  getReviewRequestEvents(
+    repo: string,
+    prNumbers: number[],
+  ): Promise<ReviewRequestEvent[]> {
+    return this.base.getReviewRequestEvents(repo, prNumbers);
   }
 
   postComment(repo: string, prNumber: number, body: string): Promise<void> {

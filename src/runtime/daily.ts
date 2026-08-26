@@ -5,6 +5,7 @@
  */
 import { resolveConfig } from "../config.js";
 import { pickReviewers } from "../scoring/pickReviewers.js";
+import { scoreDifficulty } from "../scoring/difficulty.js";
 import { formatRationale, toAssignment } from "../rationale.js";
 import type {
   Assignment,
@@ -14,6 +15,7 @@ import type {
   PullRequest,
   ReviewResponse,
 } from "../types.js";
+import { firstRequestedAt, openRequestStartedAt } from "../adapters/github.js";
 import { sync } from "./sync.js";
 import { daysBetween, hoursBetween, subtractDays } from "./dates.js";
 import { buildStalenessRepostText, stalenessLevel } from "./staleness.js";
@@ -82,31 +84,49 @@ function latestAssignmentsInWindow(
 }
 
 /**
- * Build the review-latency report. For each in-window assignment, measure the
- * clock from assignment to each assigned reviewer's first review on/after that
- * assignment. A reviewer with no such review on a still-open PR is outstanding.
+ * Build the review-latency report. Outstanding waits are measured from the
+ * GitHub `review_requested` timestamp for whoever is currently requested on
+ * an open PR. Completed reviews still come from the in-window assignment log
+ * (with GitHub request time overlaid when known).
  */
 async function computeResponses(
   deps: SiaraDeps,
   nowIso: string,
-  openKeys: Set<string>,
+  openPrs: PullRequest[],
 ): Promise<ReviewResponse[]> {
-  const windowStartDate = subtractDays(nowIso, deps.teamConfig.syncWindowDays).slice(0, 10);
+  const sinceIso = subtractDays(nowIso, deps.teamConfig.syncWindowDays);
+  const windowStartDate = sinceIso.slice(0, 10);
   const latest = latestAssignmentsInWindow(
     await deps.store.readAssignments(),
     windowStartDate,
   );
 
-  // Group PR numbers per repo so review events can be fetched in one query each.
-  const prNumbersByRepo = new Map<string, number[]>();
-  for (const a of latest.values()) {
-    const list = prNumbersByRepo.get(a.repo) ?? [];
-    list.push(a.pr);
-    prNumbersByRepo.set(a.repo, list);
+  const repos = new Set<string>(deps.repos);
+  for (const pr of openPrs) repos.add(pr.repo);
+  for (const a of latest.values()) repos.add(a.repo);
+
+  // Recently-merged PRs power the reviewer time-to-merge distribution.
+  const mergedByRepo = new Map<string, Awaited<ReturnType<typeof deps.github.listRecentlyMergedPullRequests>>>();
+  for (const repo of repos) {
+    mergedByRepo.set(repo, await deps.github.listRecentlyMergedPullRequests(repo, sinceIso));
   }
 
-  // firstReviewAt[repo#pr\0login] = earliest review timestamp by that reviewer.
+  const prNumbersByRepo = new Map<string, number[]>();
+  const addPr = (repo: string, pr: number): void => {
+    repos.add(repo);
+    const list = prNumbersByRepo.get(repo) ?? [];
+    if (!list.includes(pr)) list.push(pr);
+    prNumbersByRepo.set(repo, list);
+  };
+  for (const pr of openPrs) addPr(pr.repo, pr.number);
+  for (const a of latest.values()) addPr(a.repo, a.pr);
+  for (const [repo, merged] of mergedByRepo) {
+    for (const m of merged) addPr(repo, m.number);
+  }
+
   const firstReviewAt = new Map<string, string>();
+  const openStartsByRepo = new Map<string, Map<string, string>>();
+  const firstReqByRepo = new Map<string, Map<string, string>>();
   for (const [repo, prNumbers] of prNumbersByRepo) {
     const events = await deps.store.getReviewEvents(repo, prNumbers);
     for (const ev of events) {
@@ -116,37 +136,116 @@ async function computeResponses(
         firstReviewAt.set(key, ev.reviewedAt);
       }
     }
+    const requestEvents = await deps.github.getReviewRequestEvents(repo, prNumbers);
+    openStartsByRepo.set(repo, openRequestStartedAt(requestEvents));
+    firstReqByRepo.set(repo, firstRequestedAt(requestEvents));
   }
 
   const responses: ReviewResponse[] = [];
+  const emitted = new Set<string>();
+
+  // Outstanding (and still-requested reviewers who already reviewed) from GitHub.
+  for (const pr of openPrs) {
+    const starts = openStartsByRepo.get(pr.repo) ?? new Map();
+    for (const reviewer of pr.requestedReviewers) {
+      const start = starts.get(`${pr.number}\0${reviewer}`);
+      if (start === undefined) continue;
+      const pair = `${prKey(pr.repo, pr.number)}\0${reviewer}`;
+      const reviewedAt = firstReviewAt.get(pair);
+      if (reviewedAt !== undefined && reviewedAt >= start) {
+        responses.push({
+          repo: pr.repo,
+          pr: pr.number,
+          reviewer,
+          assignedAt: start,
+          firstReviewAt: reviewedAt,
+          latencyHours: hoursBetween(start, reviewedAt),
+          outstanding: false,
+        });
+      } else {
+        responses.push({
+          repo: pr.repo,
+          pr: pr.number,
+          reviewer,
+          assignedAt: start,
+          outstanding: true,
+          waitingHours: hoursBetween(start, nowIso),
+        });
+      }
+      emitted.add(pair);
+    }
+  }
+
+  // Completed reviews on PRs no longer requesting that reviewer (often closed).
   for (const a of latest.values()) {
     const key = prKey(a.repo, a.pr);
     const assignedAt = `${a.date}T00:00:00.000Z`;
     for (const reviewer of a.assignees) {
-      const reviewedAt = firstReviewAt.get(`${key}\0${reviewer}`);
-      // Only count a review that landed on/after the assignment (ignore an
-      // earlier re-review from a prior round).
-      if (reviewedAt !== undefined && reviewedAt >= assignedAt) {
-        responses.push({
-          repo: a.repo,
-          pr: a.pr,
-          reviewer,
-          assignedAt,
-          firstReviewAt: reviewedAt,
-          latencyHours: hoursBetween(assignedAt, reviewedAt),
-          outstanding: false,
-        });
-      } else if (openKeys.has(key)) {
-        responses.push({
-          repo: a.repo,
-          pr: a.pr,
-          reviewer,
-          assignedAt,
-          outstanding: true,
-          waitingHours: hoursBetween(assignedAt, nowIso),
-        });
+      const pair = `${key}\0${reviewer}`;
+      if (emitted.has(pair)) continue;
+      const reviewedAt = firstReviewAt.get(pair);
+      if (reviewedAt === undefined || reviewedAt < assignedAt) continue;
+      responses.push({
+        repo: a.repo,
+        pr: a.pr,
+        reviewer,
+        assignedAt,
+        firstReviewAt: reviewedAt,
+        latencyHours: hoursBetween(assignedAt, reviewedAt),
+        outstanding: false,
+      });
+    }
+  }
+
+  // Time-to-merge: measured strictly from GitHub's `review_requested` time —
+  // never the Siara assignment-log date. A reviewer with no GitHub request
+  // event on a since-merged PR gets no merge stat. When a request time exists
+  // we re-anchor the whole record to it (recomputing latency) so one response
+  // carries one real assignment time.
+  const byPair = new Map<string, ReviewResponse>();
+  for (const r of responses) byPair.set(`${prKey(r.repo, r.pr)}\0${r.reviewer}`, r);
+  for (const [repo, merged] of mergedByRepo) {
+    const firstReq = firstReqByRepo.get(repo) ?? new Map<string, string>();
+    for (const m of merged) {
+      const key = prKey(repo, m.number);
+      const reviewers = new Set<string>();
+      for (const reqKey of firstReq.keys()) {
+        const sep = reqKey.indexOf("\0");
+        if (Number(reqKey.slice(0, sep)) === m.number) reviewers.add(reqKey.slice(sep + 1));
       }
-      // else: PR closed without a review from this reviewer → not reported.
+
+      for (const reviewer of reviewers) {
+        const pair = `${key}\0${reviewer}`;
+        const assignedAt = firstReq.get(`${m.number}\0${reviewer}`);
+        if (assignedAt === undefined || m.mergedAt < assignedAt) continue;
+        const mergeHours = hoursBetween(assignedAt, m.mergedAt);
+        const existing = byPair.get(pair);
+        if (existing) {
+          existing.assignedAt = assignedAt;
+          existing.mergedAt = m.mergedAt;
+          existing.mergeHours = mergeHours;
+          // Re-anchor latency to the real request time; drop it if the review
+          // predates the request (e.g. a later re-request).
+          if (existing.firstReviewAt !== undefined) {
+            existing.latencyHours =
+              existing.firstReviewAt >= assignedAt
+                ? hoursBetween(assignedAt, existing.firstReviewAt)
+                : undefined;
+          }
+        } else {
+          const resp: ReviewResponse = {
+            repo,
+            pr: m.number,
+            reviewer,
+            assignedAt,
+            outstanding: false,
+            mergedAt: m.mergedAt,
+            mergeHours,
+          };
+          responses.push(resp);
+          byPair.set(pair, resp);
+        }
+      }
     }
   }
   return responses;
@@ -292,8 +391,31 @@ export async function daily(
         if (pr.postedAt) {
           pendingForRepost.push(pr);
         }
+
+        // Score the PR even if it already has reviewers - ensures complete difficulty data
+        let band = bands.get(key);
+        if (!band) {
+          const files = await deps.github.getPullRequestFiles(repo, pr.number);
+          const diffResult = scoreDifficulty(files, resolved);
+          band = diffResult.band;
+          // Record the band for future reference
+          if (!dry) {
+            const assignment: Assignment = {
+              date: nowIso.slice(0, 10),
+              repo,
+              pr: pr.number,
+              assignees: [...pr.requestedReviewers].sort(),
+              band: diffResult.band,
+              difficulty: diffResult.score,
+              rationale: `[AUTO-SCORED] Existing PR scored for load tracking: difficulty ${diffResult.score.toFixed(2)} → ${diffResult.band}`,
+              candidates: [],
+            };
+            await deps.store.appendAssignment(assignment);
+          }
+        }
+
         snapshotPrs.push(
-          snapshotRow(pr, [...pr.requestedReviewers].sort(), bands.get(prKey(repo, pr.number))),
+          snapshotRow(pr, [...pr.requestedReviewers].sort(), band),
         );
         continue;
       }
@@ -309,7 +431,26 @@ export async function daily(
       const prKeyStr = prKey(repo, pr.number);
       const standing = !doPost ? suggestions.get(prKeyStr) : undefined;
       if (standing) {
-        const band = bands.get(prKeyStr) ?? "moderate";
+        // Score if band is missing - ensures complete difficulty data
+        let band = bands.get(prKeyStr);
+        if (!band) {
+          const files = await deps.github.getPullRequestFiles(repo, pr.number);
+          const diffResult = scoreDifficulty(files, resolved);
+          band = diffResult.band;
+          if (!dry) {
+            const assignment: Assignment = {
+              date: nowIso.slice(0, 10),
+              repo,
+              pr: pr.number,
+              assignees: standing,
+              band: diffResult.band,
+              difficulty: diffResult.score,
+              rationale: `[AUTO-SCORED] Shadow PR scored for load tracking: difficulty ${diffResult.score.toFixed(2)} → ${diffResult.band}`,
+              candidates: [],
+            };
+            await deps.store.appendAssignment(assignment);
+          }
+        }
         assigned.push({
           repo,
           pr: pr.number,
@@ -317,7 +458,7 @@ export async function daily(
           band,
           rationale: `Standing recommendation (unchanged): @${standing.join(", @")}`,
         });
-        snapshotPrs.push(snapshotRow(pr, standing, bands.get(prKeyStr)));
+        snapshotPrs.push(snapshotRow(pr, standing, band));
         continue;
       }
 
@@ -401,12 +542,10 @@ export async function daily(
   if (!dry) {
     await deps.store.writeOpenPrsSnapshot({ takenAt: nowIso, prs: snapshotPrs });
 
-    // Review-latency report: for every assignment within the sync window, how
-    // long each assigned reviewer took to first review (or how long they've been
-    // outstanding on a still-open PR). Written to a git-tracked artifact so the
-    // store-free dashboard can render responsiveness.
-    const openKeys = new Set(snapshotPrs.map((p) => prKey(p.repo, p.pr)));
-    const responses = await computeResponses(deps, nowIso, openKeys);
+    // Review-latency report: outstanding waits from GitHub review-requested
+    // time; completed reviews from the in-window assignment log.
+    const allOpenPrs = [...openPrsByRepo.values()].flat();
+    const responses = await computeResponses(deps, nowIso, allOpenPrs);
     await deps.store.writeResponseReport({ takenAt: nowIso, responses });
   }
 
