@@ -2,6 +2,7 @@ import type { Assignment, DifficultyBand, OpenPrSnapshot, ReviewResponse } from 
 import type { DashboardInput, DashboardMetrics } from "./index.js";
 import { buildMetrics } from "./metrics.js";
 import { escapeHtml } from "./html.js";
+import { renderAgeDistribution, renderDifficultyAgeScatter, CHART_STYLES } from "./charts.js";
 
 const BANDS = ["simple", "moderate", "hard"] as const;
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -45,6 +46,8 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
   const algorithmSection = renderAlgorithmSection(input.algorithm);
+  const ageDistSection = renderAgeDistribution(openPrs);
+  const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -137,6 +140,10 @@ ${STYLES}
     </section>
 
     ${sankeySection}
+
+    ${ageDistSection}
+
+    ${diffAgeScatter}
 
     ${waitingSection}
 
@@ -1111,4 +1118,6 @@ const STYLES = `
     .pr-org { display: block; font-size: 0.72rem; color: var(--muted); }
     .count { width: 5rem; font-variant-numeric: tabular-nums; color: var(--muted); }
 
-    footer { margin-top: 2rem; font-size: 0.82rem; color: var(--muted); text-align: center; }`;
+    footer { margin-top: 2rem; font-size: 0.82rem; color: var(--muted); text-align: center; }
+
+${CHART_STYLES}`;
