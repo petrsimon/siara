@@ -453,7 +453,10 @@ describe("generateDashboard", () => {
     expect(html).toContain('href="https://github.com/org/repo/pull/7"');
     expect(html).toContain(">repo/7</a>");
     expect(html).toContain("Waiting on reviewers");
-    expect(html).toContain("Oldest");
+    // Box plot visualization (replaced table)
+    expect(html).toContain("Box shows quartiles");
+    // Box plot SVG elements
+    expect(html).toContain("<rect"); // Box plot boxes
     // Open-PRs table is sortable and searchable.
     expect(html).toContain('id="open-prs-table"');
     expect(html).toContain('class="sortable"');

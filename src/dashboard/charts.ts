@@ -143,7 +143,10 @@ function renderHistogram(
   }
   
   for (const age of data) {
-    const idx = Math.min(binCount - 1, Math.floor((age - minAge) / binWidth));
+    // Handle edge case: when range=0 (all same value), binWidth=0, put all in first bin
+    const idx = binWidth > 0 
+      ? Math.min(binCount - 1, Math.floor((age - minAge) / binWidth))
+      : 0;
     bins[idx]!.count++;
   }
   
