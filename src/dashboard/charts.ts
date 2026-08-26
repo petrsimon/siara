@@ -87,7 +87,7 @@ export function renderAgeDistribution(openPrs: OpenPrSnapshot[]): string {
   
   return `<section>
       <h2>PR age distribution</h2>
-      <p class="section-hint">How long open PRs have been waiting. Quartiles and IQR-based outlier detection (1.5×IQR rule).</p>
+      <p class="section-hint">How long open PRs have been waiting, bucketed by industry-standard time ranges (same-day, 1-3d, 1-2w, etc.). Quartiles and IQR-based outlier detection (1.5×IQR rule).</p>
       ${outlierNote}
       <div class="grid-2">
         <div>
@@ -124,34 +124,39 @@ function renderHistogram(
   const padL = 50;
   const padR = 20;
   const padT = 20;
-  const padB = 40;
+  const padB = 50;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   
-  const minAge = Math.min(...data);
-  const maxAge = Math.max(...data);
-  const range = maxAge - minAge;
-  const binCount = Math.min(15, Math.max(5, Math.ceil(Math.sqrt(data.length))));
-  const binWidth = range / binCount;
-  
+  // Fixed time buckets aligned with industry SLAs and business expectations
+  const bucketEdges = [0, 1, 3, 7, 14, 30, 60, 90, Infinity];
+  const bucketLabels = ["0-1d", "1-3d", "3-7d", "1-2w", "2-4w", "1-2mo", "2-3mo", "3mo+"];
+
   // Build histogram bins
-  const bins: { min: number; max: number; count: number }[] = [];
-  for (let i = 0; i < binCount; i++) {
-    const min = minAge + i * binWidth;
-    const max = min + binWidth;
-    bins.push({ min, max, count: 0 });
+  const bins: { min: number; max: number; label: string; count: number }[] = [];
+  for (let i = 0; i < bucketEdges.length - 1; i++) {
+    bins.push({
+      min: bucketEdges[i]!,
+      max: bucketEdges[i + 1]!,
+      label: bucketLabels[i]!,
+      count: 0,
+    });
   }
-  
+
   for (const age of data) {
-    // Handle edge case: when range=0 (all same value), binWidth=0, put all in first bin
-    const idx = binWidth > 0 
-      ? Math.min(binCount - 1, Math.floor((age - minAge) / binWidth))
-      : 0;
-    bins[idx]!.count++;
+    const idx = bucketEdges.findIndex((edge, i) => i > 0 && age < edge) - 1;
+    const binIdx = idx >= 0 ? idx : bins.length - 1;
+    bins[binIdx]!.count++;
+  }
+
+  // Filter out empty bins at the end
+  while (bins.length > 0 && bins[bins.length - 1]!.count === 0) {
+    bins.pop();
   }
   
-  const maxCount = Math.max(...bins.map(b => b.count));
-  
+  const maxCount = Math.max(...bins.map(b => b.count), 1);
+  const binCount = bins.length;
+
   // Draw bars with labels underneath
   const barsAndLabels = bins.map((bin, i) => {
     const x = padL + (i / binCount) * plotW;
@@ -159,17 +164,13 @@ function renderHistogram(
     const barH = (bin.count / maxCount) * plotH;
     const y = padT + plotH - barH;
     const centerX = x + barW / 2;
-    
-    const bar = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(barW)}" height="${fmt(barH)}" fill="var(--accent)" fill-opacity="0.7" rx="2"><title>${bin.min.toFixed(1)}–${bin.max.toFixed(1)}d: ${bin.count} PRs</title></rect>`;
-    
-    // Label: show range under each bar (rotate if bins are narrow)
-    const labelText = `${Math.round(bin.min)}-${Math.round(bin.max)}`;
-    const needsRotation = barW < 30; // Rotate labels if bars are too narrow
-    
-    const label = needsRotation
-      ? `<text x="${fmt(centerX)}" y="${H - 8}" class="svg-tick" text-anchor="end" transform="rotate(-45 ${fmt(centerX)} ${H - 8})" style="font-size: 9px">${labelText}</text>`
-      : `<text x="${fmt(centerX)}" y="${H - 12}" class="svg-tick" text-anchor="middle" style="font-size: 9px">${labelText}</text>`;
-    
+
+    const maxVal = bin.max === Infinity ? "+" : bin.max.toFixed(0);
+    const bar = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(barW)}" height="${fmt(barH)}" fill="var(--accent)" fill-opacity="0.7" rx="2"><title>${bin.label}: ${bin.count} PRs</title></rect>`;
+
+    // Always use non-rotated labels with short bucket names
+    const label = `<text x="${fmt(centerX)}" y="${padT + plotH + 18}" class="svg-tick" text-anchor="middle" style="font-size: 10px">${bin.label}</text>`;
+
     return bar + label;
   }).join("");
   
@@ -178,23 +179,33 @@ function renderHistogram(
     const y = padT + plotH - (count / maxCount) * plotH;
     return `<text x="${padL - 8}" y="${fmt(y)}" class="svg-tick" text-anchor="end" dominant-baseline="central">${count}</text>`;
   }).join("");
-  
-  // Quartile markers
+
+  // Quartile markers - map to bucket positions
   const markers = [];
-  
-  // Only show quartile lines if they're within the data range
-  if (stats.q1 >= minAge && stats.q1 <= maxAge) {
-    const x1 = padL + ((stats.q1 - minAge) / range) * plotW;
+  const maxBucketEdge = bins[bins.length - 1]!.max === Infinity
+    ? bins[bins.length - 1]!.min + 90  // Use 90 days as visual max for infinity bucket
+    : bins[bins.length - 1]!.max;
+
+  const ageToX = (age: number): number => {
+    // Find which bucket this age falls into
+    const bucketIdx = bucketEdges.findIndex((edge, i) => i > 0 && age < edge) - 1;
+    const idx = bucketIdx >= 0 ? bucketIdx : bins.length - 1;
+    // Position at center of the bucket
+    return padL + ((idx + 0.5) / binCount) * plotW;
+  };
+
+  if (stats.q1 <= maxBucketEdge) {
+    const x1 = ageToX(stats.q1);
     markers.push(`<line x1="${fmt(x1)}" y1="${padT}" x2="${fmt(x1)}" y2="${padT + plotH}" stroke="var(--band-moderate)" stroke-width="1.5" stroke-dasharray="4 2"><title>Q1: ${stats.q1.toFixed(1)}d</title></line>`);
   }
-  
-  if (stats.median >= minAge && stats.median <= maxAge) {
-    const xM = padL + ((stats.median - minAge) / range) * plotW;
+
+  if (stats.median <= maxBucketEdge) {
+    const xM = ageToX(stats.median);
     markers.push(`<line x1="${fmt(xM)}" y1="${padT}" x2="${fmt(xM)}" y2="${padT + plotH}" stroke="var(--band-hard)" stroke-width="2"><title>Median: ${stats.median.toFixed(1)}d</title></line>`);
   }
-  
-  if (stats.q3 >= minAge && stats.q3 <= maxAge) {
-    const x3 = padL + ((stats.q3 - minAge) / range) * plotW;
+
+  if (stats.q3 <= maxBucketEdge) {
+    const x3 = ageToX(stats.q3);
     markers.push(`<line x1="${fmt(x3)}" y1="${padT}" x2="${fmt(x3)}" y2="${padT + plotH}" stroke="var(--band-moderate)" stroke-width="1.5" stroke-dasharray="4 2"><title>Q3: ${stats.q3.toFixed(1)}d</title></line>`);
   }
   
@@ -334,7 +345,7 @@ export function renderWaitingDistribution(
       byReviewer.set(login, list);
     }
   }
-  
+
   if (byReviewer.size === 0) {
     return `<section><h2>Waiting on reviewers</h2><p class="empty">No open PRs with a known age.</p></section>`;
   }
@@ -414,7 +425,7 @@ ${r.ages.length} open PRs</title></rect>`;
   
   return `<section>
       <h2>Waiting on reviewers</h2>
-      <p class="section-hint">Distribution of PR ages currently assigned to each reviewer. Box shows quartiles (median = thick line), whiskers extend to 1.5×IQR, outliers shown as dots. Sorted by longest wait.</p>
+      <p class="section-hint">Distribution of PR ages (days since PR created) for each reviewer's current assignments. Box shows quartiles (median = thick line), whiskers extend to 1.5×IQR, outliers shown as dots. Sorted by longest wait.</p>
       ${chart}
     </section>`;
 }
