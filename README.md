@@ -66,16 +66,17 @@ The daily repost *is* the notification system — no separate DM/escalation infr
 
 - **SQLite** (`siara.db`, gitignored) — cached GitHub/Jira data + computed
   scores, rebuilt from APIs on cold start, incrementally updated daily.
-- **JSONL** (`data/assignments.jsonl`, git-tracked) — append-only, auditable
-  assignment log.
+- **JSONL** (`data/assignments.jsonl`, gitignored) — append-only, auditable
+  assignment log. It holds **real reviewer names**, so the plaintext `data/` dir
+  is never committed; the dashboard is published from an **encrypted** copy
+  (`data.enc`) instead — see [Publishing](#publishing-the-dashboard-github-pages).
 
 ## Status
 
-Phase 1, in active development. Full spec: `inators.main--siara-reviewer-assigner-plan.md`.
-
-Scoring layer (difficulty, familiarity, knowledge, follow-up affinity,
-files-at-risk, soft boosts) and orchestrator are the current focus. Sync,
-adapters, dashboard, and dry-run mode follow.
+Working end-to-end: sync, scoring (difficulty, familiarity, knowledge,
+follow-up affinity, files-at-risk, soft boosts), orchestrator, adapters
+(GitHub/Jira/Slack), dry-run, shadow, and the encrypted dashboard. Full spec:
+`inators.main--siara-reviewer-assigner-plan.md`.
 
 ## Usage
 
@@ -88,6 +89,7 @@ cp siara.config.example.json siara.config.json
 
 node dist/cli.js sync        # fetch GitHub/Jira signals into ./siara.db
 node dist/cli.js dry-run     # score pending PRs, no side effects (start here)
+node dist/cli.js shadow      # compute + log recommendations, post nothing
 node dist/cli.js daily       # assign + comment + request review + log
 node dist/cli.js dashboard   # write ./dashboard.html from the assignment log
 ```
@@ -131,22 +133,34 @@ repo, Siara falls back to the API for that repo.
 
 ### Publishing the dashboard (GitHub Pages)
 
-`.github/workflows/dashboard.yml` builds the dashboard from the git-tracked
-assignment log, encrypts it with **StatiCrypt** (client-side AES — the page
-decrypts in-browser on the right password), and deploys to GitHub Pages. The
-dashboard shows internal fairness data, so it is **never published in the
-clear**.
+The fairness log holds real reviewer names, so it is **never committed in the
+clear**. Instead you publish an **encrypted bundle**:
+
+```sh
+# after a daily/shadow run, encrypt data/ -> data.enc and commit it
+SIARA_LOG_KEY=<shared-passphrase> npm run publish-log
+git add data.enc && git commit -m "chore: publish fairness log" && git push
+```
+
+`.github/workflows/dashboard.yml` then, on each push to `data.enc` (plus a daily
+schedule and manual dispatch): decrypts `data.enc` with the `SIARA_LOG_KEY`
+secret, builds the dashboard, encrypts the rendered page with **StatiCrypt**
+(client-side AES — the page decrypts in-browser on the right password), and
+deploys to GitHub Pages. So the data is protected **twice**: encrypted at rest in
+git (`data.enc`) and encrypted in transit to viewers (StatiCrypt).
 
 Setup:
 
 1. Repo **Settings → Pages → Source: GitHub Actions**.
-2. Repo **Settings → Secrets and variables → Actions →** add `DASHBOARD_PASSWORD`
-   (share it with the team out-of-band, e.g. in Slack).
+2. Repo **Settings → Secrets and variables → Actions →** add two secrets, each
+   shared with the team out-of-band (e.g. in Slack):
+   - `SIARA_LOG_KEY` — the passphrase used by `npm run publish-log` (decrypts `data.enc`).
+   - `DASHBOARD_PASSWORD` — the StatiCrypt password viewers type to open the page.
 
-The workflow runs on pushes to `data/assignments.jsonl`, daily on a schedule,
-and on manual dispatch. It needs no `gh` auth or team config — only the
-committed assignment log. If `DASHBOARD_PASSWORD` is unset the run fails loudly
-rather than publishing an unencrypted page.
+The workflow needs no `gh` auth or team config — only the committed `data.enc`.
+If either secret is unset the run **fails loudly** rather than publishing an
+unencrypted or empty page. Encryption is symmetric AES-256 via `openssl`
+(preinstalled on the runner and macOS; see `scripts/log-crypt.sh`).
 
 > Fallback: if the repo moves to a GitHub Enterprise org, switch to native
 > **private GitHub Pages** (org-member auth) and drop StatiCrypt.

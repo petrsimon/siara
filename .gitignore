@@ -16,8 +16,11 @@ siara.config.json
 
 # Generated dashboard (published via CI, not committed)
 dashboard.html
-# Local review artifacts — contain real reviewer names, never commit
+# Local review artifacts — contain real reviewer names, never commit in the clear.
+# The dashboard is published from the encrypted bundle `data.enc` instead
+# (see scripts/log-crypt.sh); the plaintext data/ dir stays local-only.
 data/
+!data.enc
 siara.distribution.html
 public/
 .staticrypt.json

@@ -1,16 +1,17 @@
 name: Publish dashboard
 
-# Builds the Siara dashboard from the git-tracked assignment log
-# (data/assignments.jsonl), encrypts it with StatiCrypt (client-side AES via a
-# shared password), and deploys it to GitHub Pages. No `gh` auth or team config
-# is needed — the dashboard reads only the committed assignment log.
+# Builds the Siara dashboard from the committed *encrypted* fairness log
+# (data.enc — real reviewer names, so never committed in the clear), encrypts the
+# rendered page with StatiCrypt (client-side AES via a shared password), and
+# deploys it to GitHub Pages. No `gh` auth or team config is needed — CI decrypts
+# data.enc with the SIARA_LOG_KEY secret and reads only that log.
 
 on:
-  # Rebuild whenever the assignment log changes on main.
+  # Rebuild whenever the encrypted log changes on main.
   push:
     branches: [main]
     paths:
-      - "data/assignments.jsonl"
+      - "data.enc"
       - "src/dashboard/**"
       - ".github/workflows/dashboard.yml"
   # Daily refresh so "age"/trend metrics stay current even with no new commits.
@@ -42,6 +43,16 @@ jobs:
       - run: npm ci
 
       - run: npm run build
+
+      - name: Decrypt fairness log
+        env:
+          SIARA_LOG_KEY: ${{ secrets.SIARA_LOG_KEY }}
+        run: |
+          if [ -z "$SIARA_LOG_KEY" ]; then
+            echo "::error::SIARA_LOG_KEY secret is not set. Add it in repo Settings → Secrets → Actions (same passphrase used by 'npm run publish-log')." >&2
+            exit 1
+          fi
+          ./scripts/log-crypt.sh decrypt
 
       - name: Generate dashboard
         run: npm run dashboard
