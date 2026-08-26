@@ -76,3 +76,4 @@ export interface DailyResult {
 export { sync } from "./sync.js";
 export { daily } from "./daily.js";
 export { dryRun } from "./dryRun.js";
+export { backfill, type BackfillResult } from "./backfill.js";
