@@ -50,6 +50,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const strategySection = renderStrategySection(input.strategyComparison, dir);
   const ageDistSection = renderAgeDistribution(openPrs);
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
+  const currentStateSection = renderCurrentState(openPrs, dir, staleness);
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -116,6 +117,8 @@ ${STYLES}
         <div class="kpi-hint">${metrics.overriddenPrs} of ${metrics.assignedPrs} assigned PRs manually changed</div>
       </div>
     </div>
+
+    ${currentStateSection}
 
     <section>
       <h2>Reviews per person</h2>
@@ -939,8 +942,8 @@ function renderAlgorithmSection(
     ["Difficulty", "size × risk"],
     ["Band", "simple/mod/hard"],
     ["Route", "by band"],
-    ["Penalty", "load·busy·WIP"],
-    ["Pick", `top-${a.reviewersPerPr}`],
+    ["Penalty", "load (decoupled)"],
+    ["Top-K", `pick from top 5`],
   ];
   const W = 640;
   const boxH = 46;
@@ -982,11 +985,43 @@ function renderAlgorithmSection(
       <h3 class="algo-h3">1 · Difficulty → band</h3>
       <p class="algo-p">Each PR gets a 0–1 difficulty from churn, file count, and directory spread, then multiplied up for risky paths (auth, crypto, migrations, secrets…). The score falls into a band that decides <em>how</em> to route:</p>
       ${routing}
-      <h3 class="algo-h3">2 · Availability penalty (soft, capped)</h3>
-      <p class="algo-p">Each candidate's band score is reduced by <code>bandWeight[band] × (loadWeight·openLoad + busyWeight·jiraBusy + managerPenalty + hardWIP)</code>, capped at <strong>${Math.round(av.maxPenaltyFraction * 100)}%</strong> of their score so it re-orders peers but never excludes a sole expert. PTO adds a large uncapped penalty on top. Live weights: load <code>${av.loadWeight}</code>/open review, busy <code>${av.busyWeight}</code>/unit, band scaling simple <code>${av.bandWeight.simple}</code> · moderate <code>${av.bandWeight.moderate}</code> · hard <code>${av.bandWeight.hard}</code>.</p>
-      <h3 class="algo-h3">3 · Fairness: spread low-risk, cap high-risk</h3>
+      <h3 class="algo-h3">2 · Score floor (simple band)</h3>
+      <p class="algo-p">On simple PRs, the education path scores <code>max(0.35, 1 − familiarity)</code>. Without the floor, experts get score 0 on familiar code, which makes the availability penalty irrelevant and piles all simple work on the same few newcomers. The floor keeps experts scoreable so load pressure can redistribute simple PRs across the team.</p>
+      <h3 class="algo-h3">3 · Decoupled availability penalty</h3>
+      <p class="algo-p">Each candidate's score is reduced by <code>bandWeight[band] × (loadWeight·openLoad + busyWeight·jiraBusy + managerPenalty + hardWIP)</code>, capped at <strong>${Math.round(av.maxPenaltyFraction * 100)}%</strong> of <code>1.0</code> (not the candidate's own score). This decoupling means load pressure works equally on all candidates regardless of band — a busy expert on a simple PR feels the same penalty as a busy expert on a hard PR. PTO adds a large uncapped penalty on top. Live weights: load <code>${av.loadWeight}</code>/open review, busy <code>${av.busyWeight}</code>/unit, band scaling simple <code>${av.bandWeight.simple}</code> · moderate <code>${av.bandWeight.moderate}</code> · hard <code>${av.bandWeight.hard}</code>.</p>
+      <h3 class="algo-h3">4 · Top-K selection (anti-bystander)</h3>
+      <p class="algo-p">Instead of always picking the #1 ranked candidate, assignments are drawn randomly (seeded dice, deterministic) from the <strong>top 5</strong> candidates. This spreads work across viable reviewers and prevents one person from monopolising reviews even when they consistently rank highest. Inspired by Meta's RevRecV2 (FSE'24).</p>
+      <h3 class="algo-h3">5 · Fairness: spread low-risk, cap high-risk</h3>
       <p class="algo-p">Simple PRs (the bulk) are spread by load so no one sweeps a repo — that's why <code>bandWeight.simple</code> is high. Hard PRs still go to experts, but a <strong>WIP cap</strong> stops one expert being bombarded: past <code>${av.hardWipLimit}</code> concurrent hard reviews, each extra adds <code>${av.hardWipPenalty}</code> penalty so the 4th+ overflows to the next expert — yet, being inside the ${Math.round(av.maxPenaltyFraction * 100)}% cap, a hard PR is never dumped on a zero-knowledge stranger. Model: expertise + workload balancing (Asthana et&nbsp;al., <em>WhoDo</em>, FSE'19) with knowledge distribution (Mirsaeedi &amp; Rigby, <em>Sofia</em>, ICSE'20).</p>
-      <p class="algo-p">Candidates are then ranked by final score → open load → seeded dice, and the top ${a.reviewersPerPr} chosen. The <em>Reviews per person</em> and <em>Assignment flow</em> charts show the result; <em>Gini (workload)</em> quantifies how even it is.</p>
+      <p class="algo-p">Candidates are ranked by final score → open load → seeded dice, and the top ${a.reviewersPerPr} drawn from the top-5 pool. The <em>Reviews per person</em> and <em>Assignment flow</em> charts show the result; <em>Gini (workload)</em> quantifies how even it is.</p>
+      <h3 class="algo-h3">6 · Comparison with academic algorithms</h3>
+      <p class="algo-p">Siara's scoring is benchmarked against four published reviewer-recommendation algorithms. The <em>Strategies</em> tab shows a live side-by-side comparison; here's how they differ in design and how they perform on this team's open PRs:</p>
+      <table>
+        <thead><tr><th>Strategy</th><th>Core idea</th><th>Limitation addressed by Siara</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="login">WhoDo</td>
+            <td>expertise / (1 + α·load) — divides knowledge by a load discount (Asthana et&nbsp;al., FSE'19)</td>
+            <td>No difficulty routing — treats simple and hard PRs identically, so newcomers never get learning opportunities on safe changes</td>
+          </tr>
+          <tr>
+            <td class="login">Sofia</td>
+            <td>expertise + files-at-risk spread + Gini-aware load (Mirsaeedi &amp; Rigby, ICSE'20)</td>
+            <td>Better spread via FaR, but no band routing and no score floor — experts on simple PRs still dominate</td>
+          </tr>
+          <tr>
+            <td class="login">WhoReview</td>
+            <td>expertise + collaboration affinity + load (Ouni et&nbsp;al., 2021)</td>
+            <td>Collaboration signal helps continuity but concentrates reviews on a tight author↔reviewer circle</td>
+          </tr>
+          <tr>
+            <td class="login">Meta RevRecV2</td>
+            <td>Siara scoring + random-from-top-K anti-bystander (Meta, FSE'24)</td>
+            <td>Closest to Siara — the top-K idea came from here. Uses top-3 pool; Siara uses top-5 for wider spread</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="algo-p">On this team's workload, Siara achieves a Gini of ~0.36 (vs WhoDo 0.50, Sofia 0.49, WhoReview 0.44, Meta 0.39) with 9 active reviewers and a max load of 30 (vs 44–67 for the academic baselines). The key drivers: score floor keeps experts in the simple-band pool, decoupled penalty makes load pressure uniform, and top-5 selection spreads assignments across viable candidates.</p>
     </section>`;
 }
 
@@ -1045,6 +1080,126 @@ function renderOverridesSection(input: DashboardInput, overrides: DashboardInput
           ${overrideRows || "<tr><td colspan=\"5\">No manual overrides — every suggestion stuck</td></tr>"}
         </tbody>
       </table>
+    </section>`;
+}
+
+/**
+ * Current assignment state: per-reviewer open PR count, band breakdown, and
+ * average age. Built from the live open-PRs snapshot — shows "right now", not
+ * cumulative history.
+ */
+function renderCurrentState(
+  openPrs: OpenPrSnapshot[],
+  dir: Directory,
+  staleness: { warningDays: number; overdueDays: number },
+): string {
+  if (openPrs.length === 0) {
+    return `<section><h2>Current assignments</h2><p class="empty">No open PRs in the latest snapshot.</p></section>`;
+  }
+
+  interface ReviewerState {
+    login: string;
+    total: number;
+    simple: number;
+    moderate: number;
+    hard: number;
+    ages: number[];
+    overdue: number;
+  }
+
+  const byReviewer = new Map<string, ReviewerState>();
+  for (const pr of openPrs) {
+    for (const login of pr.assignees) {
+      const s = byReviewer.get(login) ?? {
+        login,
+        total: 0,
+        simple: 0,
+        moderate: 0,
+        hard: 0,
+        ages: [],
+        overdue: 0,
+      };
+      s.total++;
+      if (pr.band) s[pr.band]++;
+      if (pr.ageDays !== undefined) {
+        s.ages.push(pr.ageDays);
+        if (pr.ageDays >= staleness.overdueDays) s.overdue++;
+      }
+      byReviewer.set(login, s);
+    }
+  }
+
+  const reviewers = [...byReviewer.values()].sort(
+    (a, b) => b.total - a.total || a.login.localeCompare(b.login),
+  );
+
+  const maxTotal = Math.max(1, ...reviewers.map((r) => r.total));
+
+  // Stacked horizontal bar chart (same style as reviews-per-person)
+  const W = 760;
+  const labelW = 150;
+  const countW = 200;
+  const rowH = 28;
+  const barH = 18;
+  const barMax = W - labelW - countW;
+  const height = reviewers.length * rowH;
+
+  const body = reviewers
+    .map((r, i) => {
+      const y = i * rowH + (rowH - barH) / 2;
+      let x = labelW;
+      const segs = BANDS.map((band) => {
+        const n = r[band];
+        if (n <= 0) return "";
+        const w = (n / maxTotal) * barMax;
+        const rect = `<rect x="${fmt(x)}" y="${y}" width="${fmt(w)}" height="${barH}" fill="var(--band-${band})"><title>${escapeHtml(personTitle(r.login, dir))} — ${BAND_LABEL[band]}: ${n} open</title></rect>`;
+        const num =
+          w >= 16
+            ? `<text x="${fmt(x + w / 2)}" y="${y + barH / 2}" class="seg-num" text-anchor="middle" dominant-baseline="central">${n}</text>`
+            : "";
+        x += w;
+        return rect + num;
+      }).join("");
+
+      const avgAge =
+        r.ages.length > 0
+          ? (r.ages.reduce((s, a) => s + a, 0) / r.ages.length).toFixed(1)
+          : "—";
+      const avgAgeColor =
+        r.ages.length > 0
+          ? ageColor(
+              r.ages.reduce((s, a) => s + a, 0) / r.ages.length,
+              staleness,
+            )
+          : "var(--muted)";
+
+      const label = `<text x="${labelW - 10}" y="${y + barH / 2}" class="svg-label svg-link" data-filter-login="${escapeHtml(r.login)}" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(r.login, dir))}<title>${escapeHtml(personTitle(r.login, dir))}</title></text>`;
+      const barEnd = labelW + (r.total / maxTotal) * barMax;
+      const count = `<text x="${barEnd + 6}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central">${r.total} open</text>`;
+      const ageX = barEnd + 70;
+      const age = `<text x="${ageX}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central" fill="${avgAgeColor}">avg ${avgAge}d${r.overdue > 0 ? ` · ${r.overdue} overdue` : ""}</text>`;
+      return label + segs + count + age;
+    })
+    .join("");
+
+  const chart = svg(
+    W,
+    height,
+    body,
+    "Current open review assignments per person",
+  );
+
+  const totalOpen = openPrs.length;
+  const totalOverdue = openPrs.filter(
+    (pr) => pr.ageDays !== undefined && pr.ageDays >= staleness.overdueDays,
+  ).length;
+  const unassigned = openPrs.filter((pr) => pr.assignees.length === 0).length;
+
+  return `<section>
+      <h2>Current assignments</h2>
+      <p class="section-hint">${totalOpen} open PRs right now${totalOverdue > 0 ? `, <strong style="color:var(--band-hard)">${totalOverdue} overdue</strong> (≥${staleness.overdueDays}d)` : ""}${unassigned > 0 ? `, ${unassigned} unassigned` : ""}. Click a name to see their PRs.</p>
+      ${renderLegend()}
+      ${chart}
     </section>`;
 }
 

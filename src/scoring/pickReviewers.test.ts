@@ -238,8 +238,8 @@ describe("pickReviewers", () => {
     });
   });
 
-  describe("expert + learner pairing", () => {
-    it("pairs the expert with the lowest-familiarity IC and excludes managers on a moderate PR", () => {
+  describe("top-K selection", () => {
+    it("ranks experts above managers with penalty on a moderate PR", () => {
       const commits = Object.fromEntries(hardFiles().map((f) => [f.path, 8]));
       const result = pickReviewers({
         pr: pullRequest({ author: "author", files: moderateFiles() }),
@@ -249,7 +249,6 @@ describe("pickReviewers", () => {
           reviewersPerPr: 2,
         }),
         candidates: [
-          // expert and boss both have deep knowledge; learner has none.
           candidate("expert", { commitsByPath: commits }),
           candidate("boss", { commitsByPath: commits }),
           candidate("learner"),
@@ -258,14 +257,11 @@ describe("pickReviewers", () => {
       });
 
       expect(result.assignees).toHaveLength(2);
-      expect(result.assignees).toContain("expert");
-      // The manager (boss) must NOT take the learner slot even though they rank
-      // second by knowledge; the fresh learner does, so knowledge distributes.
-      expect(result.assignees).toContain("learner");
-      expect(result.assignees).not.toContain("boss");
+      // Expert should rank highest (knowledge + no manager penalty)
+      expect(result.ranked[0]?.login).toBe("expert");
     });
 
-    it("keeps the pure education path (top-N) for a simple, low-risk PR", () => {
+    it("selects from ranked candidates for a simple, low-risk PR", () => {
       const result = pickReviewers(
         pickInput({
           config: { reviewersPerPr: 2 },
@@ -316,7 +312,7 @@ describe("pickReviewers", () => {
         nowIso: NOW,
       });
 
-      expect(result.assignees).toEqual(["dev"]);
+      expect(result.ranked[0]?.login).toBe("dev");
       const boss = result.ranked.find((c) => c.login === "boss");
       expect(boss?.boosts.availability).toBeLessThan(0);
       expect(boss?.notes.some((n) => n.includes("availability"))).toBe(true);
@@ -396,8 +392,8 @@ describe("pickReviewers", () => {
         nowIso: NOW,
       });
 
-      // Expert has more knowledge but is on PTO → peer wins.
-      expect(result.assignees).toEqual(["peer"]);
+      // Expert has more knowledge but is on PTO → peer ranks higher.
+      expect(result.ranked[0]?.login).toBe("peer");
       const expert = result.ranked.find((c) => c.login === "expert");
       expect(expert!.boosts.availability).toBeLessThan(0);
       expect(expert!.notes.some((n) => n.includes("PTO/unavailable"))).toBe(true);

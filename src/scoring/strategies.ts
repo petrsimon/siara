@@ -8,7 +8,7 @@
  * top-N selection.
  *
  * Strategies:
- *   siara     — band-routed (current default): simple→education, hard→expertise
+ *   siara     — band-routed with score floor, decoupled load penalty, top-K selection
  *   whodo     — expertise / (1 + α·load)  (Asthana et al., FSE 2019)
  *   sofia     — expertise + files-at-risk spread + Gini-aware load (Mirsaeedi & Rigby, ICSE 2020)
  *   whoreview — expertise + collaboration affinity + load (Ouni et al., 2021)
@@ -117,9 +117,8 @@ function buildFinalScores(
   return result;
 }
 
-function computeAvailabilityPenalty(
+function computeDecoupledPenalty(
   c: CandidateHistory,
-  primary: number,
   difficulty: DifficultyResult,
   config: ResolvedConfig,
   nowIso: string,
@@ -134,10 +133,7 @@ function computeAvailabilityPenalty(
     hardReviewLoad: c.hardReviewLoad,
     team: config,
   });
-  const cappedSoft = Math.min(
-    softRaw,
-    primary * config.availability.maxPenaltyFraction,
-  );
+  const cappedSoft = Math.min(softRaw, config.availability.maxPenaltyFraction);
   const penalty =
     cappedSoft + (unavailable ? config.availability.unavailablePenalty : 0);
 
@@ -164,8 +160,20 @@ function computeAvailabilityPenalty(
 }
 
 // ---------------------------------------------------------------------------
-// Strategy: siara (current default — band-routed)
+// Strategy: siara (default — band-routed + score floor + decoupled penalty
+//                  + top-K selection for workload spread)
+//
+// v2 improvements over the original:
+//   1. Simple band floor: max(0.35, 1-fam) — experts keep a minimum score
+//      so the availability penalty has room to rebalance load.
+//   2. Decoupled penalty: capped against 1.0, not primaryScore — load
+//      pressure works equally on all candidates regardless of band.
+//   3. Top-5 selection: pick randomly (seeded) from the top 5 candidates,
+//      spreading work across viable reviewers instead of always picking #1.
 // ---------------------------------------------------------------------------
+
+const SIMPLE_FLOOR = 0.35;
+const SIARA_TOP_K = 5;
 
 function primaryScore(
   band: DifficultyResult["band"],
@@ -174,47 +182,12 @@ function primaryScore(
 ): number {
   switch (band) {
     case "simple":
-      return 1 - familiarity;
+      return Math.max(SIMPLE_FLOOR, 1 - familiarity);
     case "moderate":
       return 0.5 * familiarity + 0.5 * knowledge;
     case "hard":
       return knowledge;
   }
-}
-
-function siaraSelectAssignees(
-  ranked: ScoredCandidate[],
-  atRiskCount: number,
-  band: DifficultyResult["band"],
-  config: ResolvedConfig,
-): string[] {
-  const n = Math.min(config.reviewersPerPr, ranked.length);
-  if (n === 0) return [];
-
-  const topN = ranked.slice(0, n).map((c) => c.login);
-
-  const shouldPair =
-    config.filesAtRisk.pairWithExpert &&
-    n >= 2 &&
-    (band !== "simple" || atRiskCount > 0);
-  if (!shouldPair) return topN;
-
-  const expert = [...ranked].sort((a, b) => b.knowledge - a.knowledge)[0];
-  const managers = new Set(config.managers);
-  const learner =
-    [...ranked]
-      .filter((c) => c.login !== expert?.login && !managers.has(c.login))
-      .sort((a, b) => a.familiarity - b.familiarity)[0] ??
-    ranked.find((c) => c.login !== expert?.login);
-
-  const pair: string[] = [];
-  if (expert) pair.push(expert.login);
-  if (learner && !pair.includes(learner.login)) pair.push(learner.login);
-  for (const c of ranked) {
-    if (pair.length >= n) break;
-    if (!pair.includes(c.login)) pair.push(c.login);
-  }
-  return pair.slice(0, n);
 }
 
 function strategySiara(input: StrategyInput): StrategyResult {
@@ -229,9 +202,11 @@ function strategySiara(input: StrategyInput): StrategyResult {
     const fam = familiarity[c.login] ?? 0;
     const know = knowledge[c.login] ?? 0;
     const notes: string[] = [];
+    const edu = 1 - fam;
     if (difficulty.band === "simple") {
+      const floored = Math.max(SIMPLE_FLOOR, edu);
       notes.push(
-        `education path: familiarity ${fam.toFixed(2)} (lower = preferred)`,
+        `education path: max(${SIMPLE_FLOOR}, edu=${edu.toFixed(2)}) = ${floored.toFixed(2)}`,
       );
     } else if (difficulty.band === "hard") {
       notes.push(`expertise path: knowledge ${know.toFixed(2)}`);
@@ -248,13 +223,7 @@ function strategySiara(input: StrategyInput): StrategyResult {
       notes.push(`files-at-risk spread +${spreadBoost.toFixed(2)}`);
 
     const primary = primaryScore(difficulty.band, fam, know);
-    const avail = computeAvailabilityPenalty(
-      c,
-      primary,
-      difficulty,
-      config,
-      nowIso,
-    );
+    const avail = computeDecoupledPenalty(c, difficulty, config, nowIso);
     notes.push(...avail.notes);
 
     return {
@@ -277,12 +246,18 @@ function strategySiara(input: StrategyInput): StrategyResult {
   const boosted = applySoftBoosts(scored, jira, config);
   const finalScoreByLogin = buildFinalScores(boosted);
   const ranked = sortByFinalScore(boosted, finalScoreByLogin, pr, config);
-  const assignees = siaraSelectAssignees(
-    ranked,
-    filesAtRisk.atRiskCount,
-    difficulty.band,
-    config,
+
+  const n = Math.min(config.reviewersPerPr, ranked.length);
+  if (n === 0) return { ranked, assignees: [], finalScoreByLogin };
+
+  const poolSize = Math.min(SIARA_TOP_K, ranked.length);
+  const pool = ranked.slice(0, poolSize);
+  const shuffled = [...pool].sort(
+    (a, b) =>
+      seededDice(pr.number, a.login, config.diceSeedSalt) -
+      seededDice(pr.number, b.login, config.diceSeedSalt),
   );
+  const assignees = shuffled.slice(0, n).map((c) => c.login);
 
   return { ranked, assignees, finalScoreByLogin };
 }
