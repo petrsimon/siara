@@ -3,9 +3,11 @@
  * deterministic assignment.
  *
  * Pipeline (per the plan):
- *   eligible filter → difficulty band → band-routed primary score
- *   → files-at-risk spread boost → follow-up affinity boost → soft Jira boosts
- *   → sort by (finalScore desc, load asc, seeded dice asc) → top N
+ *   eligible filter → difficulty band → strategy-specific scoring → top N
+ *
+ * The scoring strategy is pluggable: "siara" (default, band-routed), "whodo"
+ * (expertise/load), "sofia" (expertise + FaR + Gini), "whoreview" (expertise +
+ * collaboration + load), "meta" (Siara + anti-bystander randomization).
  *
  * Pure and deterministic: no I/O, no clock (nowIso passed in), ties broken by a
  * seeded dice so identical inputs always yield identical assignments.
@@ -18,14 +20,12 @@ import type {
   PullRequest,
   ScoredCandidate,
 } from "../types.js";
-import { seededDice } from "../util/dice.js";
-import { availabilityPenalty, isReviewerUnavailable } from "./availability.js";
 import { scoreDifficulty } from "./difficulty.js";
-import { scoreFamiliarity } from "./familiarity.js";
 import { scoreFilesAtRisk } from "./filesAtRisk.js";
-import { scoreFollowUp } from "./followUp.js";
-import { scoreKnowledge } from "./knowledge.js";
-import { applySoftBoosts } from "./softBoosts.js";
+import { type StrategyName, runStrategy } from "./strategies.js";
+
+export type { StrategyName } from "./strategies.js";
+export { ALL_STRATEGIES } from "./strategies.js";
 
 export interface PickInput {
   pr: PullRequest;
@@ -35,6 +35,8 @@ export interface PickInput {
   jira?: JiraData;
   /** ISO "now" for affinity windowing — injected for determinism. */
   nowIso: string;
+  /** Scoring strategy to use (default: "siara"). */
+  strategy?: StrategyName;
 }
 
 export interface PickResult {
@@ -47,6 +49,8 @@ export interface PickResult {
   assignees: string[];
   /** Total additive boosts folded into the final sort, per login. */
   finalScoreByLogin: Record<string, number>;
+  /** Which strategy produced this result. */
+  strategy: StrategyName;
 }
 
 /** Eligible = roster ∩ not blocklisted ∩ not author ∩ not already requested. */
@@ -67,207 +71,32 @@ function filterEligible(
   );
 }
 
-/**
- * Band-routed primary score in 0–1.
- *   simple   → education: LOWEST familiarity wins → 1 - familiarity
- *   moderate → equal blend of familiarity and knowledge
- *   hard     → expertise: knowledge
- */
-function primaryScore(
-  band: DifficultyResult["band"],
-  familiarity: number,
-  knowledge: number,
-): number {
-  switch (band) {
-    case "simple":
-      return 1 - familiarity;
-    case "moderate":
-      return 0.5 * familiarity + 0.5 * knowledge;
-    case "hard":
-      return knowledge;
-  }
-}
-
-function sumBoosts(c: ScoredCandidate): number {
-  return (
-    c.boosts.followUp +
-    c.boosts.filesAtRisk +
-    c.boosts.softEstimate +
-    c.boosts.softPriority +
-    c.boosts.availability
-  );
-}
-
 export function pickReviewers(input: PickInput): PickResult {
   const { pr, config, jira, nowIso } = input;
+  const strategy = input.strategy ?? "siara";
 
   const difficulty = scoreDifficulty(pr.files, config);
   const eligible = filterEligible(input.candidates, pr, config);
 
-  const familiarity = scoreFamiliarity(eligible, pr.files, config);
-  const knowledge = scoreKnowledge(eligible, pr.files, config);
-  const followUp = scoreFollowUp(eligible, pr, jira, config, nowIso);
+  // Files-at-risk count is always computed for rationale/dashboard, even if the
+  // strategy doesn't use it directly.
   const filesAtRisk = scoreFilesAtRisk(eligible, pr.files, config);
 
-  const scored: ScoredCandidate[] = eligible.map((c) => {
-    const fam = familiarity[c.login] ?? 0;
-    const know = knowledge[c.login] ?? 0;
-    const notes: string[] = [];
-    if (difficulty.band === "simple") {
-      notes.push(`education path: familiarity ${fam.toFixed(2)} (lower = preferred)`);
-    } else if (difficulty.band === "hard") {
-      notes.push(`expertise path: knowledge ${know.toFixed(2)}`);
-    } else {
-      notes.push(`blended path: familiarity ${fam.toFixed(2)} + knowledge ${know.toFixed(2)}`);
-    }
-    const followUpBoost = followUp[c.login] ?? 0;
-    const spreadBoost = filesAtRisk.boosts[c.login] ?? 0;
-    if (followUpBoost > 0) notes.push(`follow-up affinity +${followUpBoost.toFixed(2)}`);
-    if (spreadBoost > 0) notes.push(`files-at-risk spread +${spreadBoost.toFixed(2)}`);
-
-    // Availability penalty: manager role + jira-busy + open load, band-scaled.
-    // Stored as a negative boost so it flows through the same sort/rationale path.
-    // Capped at a fraction of the primary score so it stays SOFT — a sole expert
-    // keeps at least (1 - maxPenaltyFraction) of their score and is never flipped
-    // below a zero-knowledge peer (availability de-prioritizes, never excludes).
-    const primary = primaryScore(difficulty.band, fam, know);
-    const unavailable = isReviewerUnavailable(config.reviewers[c.login], nowIso);
-    // Soft penalty (load/busy/manager) is capped so a strong expert is never
-    // flipped below a zero-knowledge peer by busyness alone. The PTO penalty is
-    // deliberately UNCAPPED and added on top: PTO *should* flip an expert below
-    // an available peer, yet a sole-viable reviewer still stays assignable
-    // (they remain the top of the ranked list even at a negative score).
-    const softRaw = availabilityPenalty({
-      login: c.login,
-      band: difficulty.band,
-      openReviewLoad: c.openReviewLoad,
-      jiraBusy: c.jiraBusy,
-      hardReviewLoad: c.hardReviewLoad,
-      team: config,
-    });
-    const cappedSoft = Math.min(
-      softRaw,
-      primary * config.availability.maxPenaltyFraction,
-    );
-    const penalty =
-      cappedSoft + (unavailable ? config.availability.unavailablePenalty : 0);
-    if (penalty > 1e-9) {
-      const parts: string[] = [];
-      if (unavailable) parts.push("PTO/unavailable");
-      if (config.managers.includes(c.login) && difficulty.band !== "simple") {
-        parts.push("manager");
-      }
-      if (c.jiraBusy > 0) parts.push("busy");
-      if (
-        difficulty.band === "hard" &&
-        config.availability.hardWipLimit > 0 &&
-        (c.hardReviewLoad ?? 0) >= config.availability.hardWipLimit
-      ) {
-        parts.push("hard-WIP");
-      }
-      if (c.openReviewLoad > 0) parts.push("load");
-      notes.push(`availability −${penalty.toFixed(2)} (${parts.join("+") || "load"})`);
-    }
-
-    return {
-      login: c.login,
-      primaryScore: primary,
-      familiarity: fam,
-      knowledge: know,
-      boosts: {
-        followUp: followUpBoost,
-        filesAtRisk: spreadBoost,
-        softEstimate: 0,
-        softPriority: 0,
-        availability: penalty > 0 ? -penalty : 0,
-      },
-      openReviewLoad: c.openReviewLoad,
-      notes,
-    };
-  });
-
-  const boosted = applySoftBoosts(scored, jira, config);
-
-  const finalScoreByLogin: Record<string, number> = {};
-  for (const c of boosted) {
-    finalScoreByLogin[c.login] = c.primaryScore + sumBoosts(c);
-  }
-
-  // Sort: final score desc → open load asc → seeded dice asc (deterministic).
-  const ranked = [...boosted].sort((a, b) => {
-    const fs = (finalScoreByLogin[b.login] ?? 0) - (finalScoreByLogin[a.login] ?? 0);
-    if (Math.abs(fs) > 1e-9) return fs;
-    if (a.openReviewLoad !== b.openReviewLoad) {
-      return a.openReviewLoad - b.openReviewLoad;
-    }
-    return (
-      seededDice(pr.number, a.login, config.diceSeedSalt) -
-      seededDice(pr.number, b.login, config.diceSeedSalt)
-    );
-  });
-
-  const assignees = selectAssignees(
-    ranked,
-    filesAtRisk.atRiskCount,
-    difficulty.band,
+  const result = runStrategy(strategy, {
+    pr,
     config,
-  );
+    eligible,
+    difficulty,
+    jira,
+    nowIso,
+  });
 
   return {
     difficulty,
     atRiskCount: filesAtRisk.atRiskCount,
-    ranked,
-    assignees,
-    finalScoreByLogin,
+    ranked: result.ranked,
+    assignees: result.assignees,
+    finalScoreByLogin: result.finalScoreByLogin,
+    strategy,
   };
-}
-
-/**
- * Pick the top N reviewers. When reviewersPerPr >= 2 and pairWithExpert is on,
- * pair the highest-knowledge expert with a genuine *learner* — the lowest-
- * familiarity eligible IC — so knowledge propagates to a new reviewer and the
- * bus factor grows. Managers are excluded from the learner slot: they already
- * carry broad context, so pairing with them wouldn't distribute knowledge.
- *
- * Pairing only kicks in where it adds value: on knowledge-routed bands
- * (moderate/hard), which would otherwise stack the sole expert, and on any band
- * touching at-risk files (which needs an expert present). Simple, low-risk PRs
- * stay on the pure education path — top-N lowest-familiarity, no expert forcing.
- */
-function selectAssignees(
-  ranked: ScoredCandidate[],
-  atRiskCount: number,
-  band: DifficultyResult["band"],
-  config: ResolvedConfig,
-): string[] {
-  const n = Math.min(config.reviewersPerPr, ranked.length);
-  if (n === 0) return [];
-
-  const topN = ranked.slice(0, n).map((c) => c.login);
-
-  const shouldPair =
-    config.filesAtRisk.pairWithExpert &&
-    n >= 2 &&
-    (band !== "simple" || atRiskCount > 0);
-  if (!shouldPair) return topN;
-
-  const expert = [...ranked].sort((a, b) => b.knowledge - a.knowledge)[0];
-  const managers = new Set(config.managers);
-  // Learner = lowest-familiarity non-manager IC. Fall back to the best-ranked
-  // non-expert if every non-manager is exhausted, so a small team still fills n.
-  const learner =
-    [...ranked]
-      .filter((c) => c.login !== expert?.login && !managers.has(c.login))
-      .sort((a, b) => a.familiarity - b.familiarity)[0] ??
-    ranked.find((c) => c.login !== expert?.login);
-
-  const pair: string[] = [];
-  if (expert) pair.push(expert.login);
-  if (learner && !pair.includes(learner.login)) pair.push(learner.login);
-  // Top up to n (reviewersPerPr > 2) with the next-best ranked not yet chosen.
-  for (const c of ranked) {
-    if (pair.length >= n) break;
-    if (!pair.includes(c.login)) pair.push(c.login);
-  }
-  return pair.slice(0, n);
 }

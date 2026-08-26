@@ -343,6 +343,7 @@ export async function daily(
         candidates,
         jira,
         nowIso,
+        strategy: opts.strategy,
       });
       if (!doPost && result.assignees.length > 0) {
         bumpShadowLoad(result.assignees);

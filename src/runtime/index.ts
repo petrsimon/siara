@@ -6,6 +6,7 @@
 import type { GitHubAdapter, JiraAdapter, SlackAdapter } from "../adapters/index.js";
 import type { SiaraRepoConfig, SiaraTeamConfig } from "../config.js";
 import type { SiaraStore } from "../store/index.js";
+import type { StrategyName } from "../scoring/pickReviewers.js";
 import type { Assignment, Override } from "../types.js";
 
 /** Everything a runtime entrypoint needs, injected for testability. */
@@ -51,6 +52,8 @@ export interface DailyOptions {
    * NOTHING to GitHub or Slack. The log is deduped per PR so repeated runs don't
    * bloat it. Defaults to true (post). Ignored when dryRun is true. */
   post?: boolean;
+  /** Scoring strategy override (default: "siara"). */
+  strategy?: StrategyName;
 }
 
 export interface DailyPrResult {

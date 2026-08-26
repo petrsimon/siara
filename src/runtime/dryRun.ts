@@ -9,9 +9,9 @@ import type { DailyOptions, DailyPrResult, DailyResult, SiaraDeps } from "./inde
 export async function dryRun(
   deps: SiaraDeps,
   nowIso: string,
-  opts: Pick<DailyOptions, "noSync"> = {},
+  opts: Pick<DailyOptions, "noSync" | "strategy"> = {},
 ): Promise<DailyResult> {
-  return daily(deps, nowIso, { dryRun: true, noSync: opts.noSync });
+  return daily(deps, nowIso, { dryRun: true, noSync: opts.noSync, strategy: opts.strategy });
 }
 
 function formatPrBlock(pr: DailyPrResult): string {
