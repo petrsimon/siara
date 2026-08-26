@@ -50,7 +50,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const strategySection = renderStrategySection(input.strategyComparison, dir);
   const ageDistSection = renderAgeDistribution(openPrs);
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
-  const currentStateSection = renderCurrentState(openPrs, dir, staleness);
+  const currentStateSection = renderCurrentState(openPrs, input.assignments, dir, staleness, input.generatedAtIso);
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -1090,12 +1090,26 @@ function renderOverridesSection(input: DashboardInput, overrides: DashboardInput
  */
 function renderCurrentState(
   openPrs: OpenPrSnapshot[],
+  assignments: Assignment[],
   dir: Directory,
   staleness: { warningDays: number; overdueDays: number },
+  nowIso: string,
 ): string {
   if (openPrs.length === 0) {
     return `<section><h2>Current assignments</h2><p class="empty">No open PRs in the latest snapshot.</p></section>`;
   }
+
+  // Build lookup: (repo, pr) → assignment date (ISO) per assignee.
+  const assignedAt = new Map<string, string>();
+  for (const a of assignments) {
+    for (const login of a.assignees) {
+      assignedAt.set(`${a.repo}#${a.pr}#${login}`, a.date);
+    }
+  }
+
+  const nowMs = new Date(nowIso).getTime();
+  const daysSince = (iso: string): number =>
+    Math.max(0, Math.floor((nowMs - new Date(iso).getTime()) / 86_400_000));
 
   interface ReviewerState {
     login: string;
@@ -1103,7 +1117,7 @@ function renderCurrentState(
     simple: number;
     moderate: number;
     hard: number;
-    ages: number[];
+    waitDays: number[];
     overdue: number;
   }
 
@@ -1116,14 +1130,17 @@ function renderCurrentState(
         simple: 0,
         moderate: 0,
         hard: 0,
-        ages: [],
+        waitDays: [],
         overdue: 0,
       };
       s.total++;
       if (pr.band) s[pr.band]++;
-      if (pr.ageDays !== undefined) {
-        s.ages.push(pr.ageDays);
-        if (pr.ageDays >= staleness.overdueDays) s.overdue++;
+      const key = `${pr.repo}#${pr.pr}#${login}`;
+      const aDate = assignedAt.get(key);
+      if (aDate) {
+        const wait = daysSince(aDate);
+        s.waitDays.push(wait);
+        if (wait >= staleness.overdueDays) s.overdue++;
       }
       byReviewer.set(login, s);
     }
@@ -1161,14 +1178,14 @@ function renderCurrentState(
         return rect + num;
       }).join("");
 
-      const avgAge =
-        r.ages.length > 0
-          ? (r.ages.reduce((s, a) => s + a, 0) / r.ages.length).toFixed(1)
+      const avgWait =
+        r.waitDays.length > 0
+          ? (r.waitDays.reduce((s, a) => s + a, 0) / r.waitDays.length).toFixed(1)
           : "—";
-      const avgAgeColor =
-        r.ages.length > 0
+      const avgWaitColor =
+        r.waitDays.length > 0
           ? ageColor(
-              r.ages.reduce((s, a) => s + a, 0) / r.ages.length,
+              r.waitDays.reduce((s, a) => s + a, 0) / r.waitDays.length,
               staleness,
             )
           : "var(--muted)";
@@ -1176,9 +1193,9 @@ function renderCurrentState(
       const label = `<text x="${labelW - 10}" y="${y + barH / 2}" class="svg-label svg-link" data-filter-login="${escapeHtml(r.login)}" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(r.login, dir))}<title>${escapeHtml(personTitle(r.login, dir))}</title></text>`;
       const barEnd = labelW + (r.total / maxTotal) * barMax;
       const count = `<text x="${barEnd + 6}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central">${r.total} open</text>`;
-      const ageX = barEnd + 70;
-      const age = `<text x="${ageX}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central" fill="${avgAgeColor}">avg ${avgAge}d${r.overdue > 0 ? ` · ${r.overdue} overdue` : ""}</text>`;
-      return label + segs + count + age;
+      const waitX = barEnd + 70;
+      const wait = `<text x="${waitX}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central" fill="${avgWaitColor}">avg ${avgWait}d${r.overdue > 0 ? ` · ${r.overdue} overdue` : ""}</text>`;
+      return label + segs + count + wait;
     })
     .join("");
 
@@ -1190,14 +1207,12 @@ function renderCurrentState(
   );
 
   const totalOpen = openPrs.length;
-  const totalOverdue = openPrs.filter(
-    (pr) => pr.ageDays !== undefined && pr.ageDays >= staleness.overdueDays,
-  ).length;
+  const totalOverdue = [...byReviewer.values()].reduce((s, r) => s + r.overdue, 0);
   const unassigned = openPrs.filter((pr) => pr.assignees.length === 0).length;
 
   return `<section>
       <h2>Current assignments</h2>
-      <p class="section-hint">${totalOpen} open PRs right now${totalOverdue > 0 ? `, <strong style="color:var(--band-hard)">${totalOverdue} overdue</strong> (≥${staleness.overdueDays}d)` : ""}${unassigned > 0 ? `, ${unassigned} unassigned` : ""}. Click a name to see their PRs.</p>
+      <p class="section-hint">${totalOpen} open PRs right now${totalOverdue > 0 ? `, <strong style="color:var(--band-hard)">${totalOverdue} overdue</strong> (≥${staleness.overdueDays}d since assignment)` : ""}${unassigned > 0 ? `, ${unassigned} unassigned` : ""}. Wait time = days since Siara assigned the reviewer, not PR age. Click a name to see their PRs.</p>
       ${renderLegend()}
       ${chart}
     </section>`;
