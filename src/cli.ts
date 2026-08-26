@@ -10,13 +10,14 @@ import { SlackHttpAdapter } from "./adapters/slack.js";
 import type { SlackAdapter } from "./adapters/index.js";
 import type { SiaraTeamConfig } from "./config.js";
 import { loadConfig } from "./config-loader.js";
-import { generateDashboard } from "./dashboard/index.js";
+import { generateDashboard, type StrategyComparison } from "./dashboard/index.js";
+import { ALL_STRATEGIES, type StrategyName } from "./scoring/pickReviewers.js";
 import { daily, dryRun, sync } from "./runtime/index.js";
 import { readAssignmentsFile } from "./store/assignmentsLog.js";
 import { overridesPathFor, readOverridesFile } from "./store/overridesLog.js";
 import { readOpenPrsSnapshot, snapshotPathFor } from "./store/snapshotLog.js";
 import { readResponseReport, responsePathFor } from "./store/responseLog.js";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 const ASSIGNMENTS_PATH = "./data/assignments.jsonl";
@@ -35,6 +36,7 @@ Usage:
 Flags:
   --no-sync   Skip the sync step; score from the cached store (fast iteration)
   --no-post   Compute + write local artifacts but post nothing to GitHub/Slack
+  --strategy <name>   Scoring strategy: ${ALL_STRATEGIES.join(", ")} (default: siara)
 
 Environment:
   SIARA_CONFIG   Path to config JSON (default: ./siara.config.json)
@@ -107,6 +109,19 @@ async function main(): Promise<void> {
   const noSync = process.argv.includes("--no-sync");
   const noPost = process.argv.includes("--no-post");
 
+  const stratIdx = process.argv.indexOf("--strategy");
+  const stratArg = stratIdx !== -1 ? process.argv[stratIdx + 1] : undefined;
+  const strategy: StrategyName | undefined = stratArg
+    ? (ALL_STRATEGIES.includes(stratArg as StrategyName)
+        ? (stratArg as StrategyName)
+        : (() => {
+            console.error(
+              `Unknown strategy "${stratArg}". Valid: ${ALL_STRATEGIES.join(", ")}`,
+            );
+            process.exit(1);
+          })())
+    : undefined;
+
   // Dashboard only reads the git-tracked JSONL log — no config, adapters, or
   // SQLite (avoids loading the better-sqlite3 native addon entirely).
   if (command === "dashboard") {
@@ -141,6 +156,16 @@ async function main(): Promise<void> {
     } catch {
       // No config available — fall back to defaults inside the renderer.
     }
+    const STRAT_JSON = "./data/strategy-comparison.json";
+    let strategyComparison: StrategyComparison | undefined;
+    if (existsSync(STRAT_JSON)) {
+      try {
+        strategyComparison = JSON.parse(readFileSync(STRAT_JSON, "utf8")) as StrategyComparison;
+      } catch {
+        console.warn("Could not parse strategy-comparison.json — skipping Strategies tab.");
+      }
+    }
+
     const html = generateDashboard({
       assignments,
       overrides,
@@ -149,6 +174,7 @@ async function main(): Promise<void> {
       reviewers,
       staleness,
       algorithm,
+      strategyComparison,
       generatedAtIso: nowIso,
     });
     mkdirSync(dirname(outPath), { recursive: true });
@@ -232,7 +258,7 @@ async function main(): Promise<void> {
       case "daily": {
         // `shadow` = daily that posts nothing (also via `daily --no-post`).
         const post = command === "shadow" ? false : !noPost;
-        const result = await daily(deps, nowIso, { noSync, post });
+        const result = await daily(deps, nowIso, { noSync, post, strategy });
         if (!post) {
           console.log("[SHADOW] Computing recommendations — no GitHub or Slack posts.");
         }
@@ -264,7 +290,7 @@ async function main(): Promise<void> {
         break;
       }
       case "dry-run": {
-        const result = await dryRun(deps, nowIso, { noSync });
+        const result = await dryRun(deps, nowIso, { noSync, strategy });
         if (result.assigned.length === 0) {
           console.log("[DRY RUN] No pending PRs to score.");
         } else {

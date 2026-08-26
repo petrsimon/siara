@@ -12,6 +12,7 @@ import type {
   Override,
   ResponseTimeReport,
 } from "../types.js";
+import type { StrategyName } from "../scoring/pickReviewers.js";
 import { renderDashboardHtml } from "./generate.js";
 import { buildMetrics } from "./metrics.js";
 
@@ -44,8 +45,38 @@ export interface DashboardInput {
       maxPenaltyFraction: number;
     };
   };
+  /** Strategy comparison data — computed by `siara compare`, optional. */
+  strategyComparison?: StrategyComparison;
   /** ISO timestamp for the "generated at" footer — injected for determinism. */
   generatedAtIso: string;
+}
+
+/** Pre-computed strategy comparison data (written by `siara compare`). */
+export interface StrategyComparison {
+  generatedAt: string;
+  totalPrs: number;
+  strategies: StrategyName[];
+  metrics: StrategyComparisonMetrics[];
+  prs: StrategyComparisonPr[];
+}
+
+export interface StrategyComparisonMetrics {
+  strategy: StrategyName;
+  gini: number;
+  activeReviewers: number;
+  maxLoad: number;
+  minLoad: number;
+  loadByPerson: Record<string, number>;
+  agreementPct: number;
+}
+
+export interface StrategyComparisonPr {
+  repo: string;
+  pr: number;
+  title: string;
+  band: DifficultyBand;
+  difficulty: number;
+  picks: Record<StrategyName, string[]>;
 }
 
 /** Fairness + engagement metrics computed from the assignment log. */

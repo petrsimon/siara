@@ -1,5 +1,6 @@
 import type { Assignment, DifficultyBand, OpenPrSnapshot, ReviewResponse } from "../types.js";
-import type { DashboardInput, DashboardMetrics } from "./index.js";
+import type { DashboardInput, DashboardMetrics, StrategyComparison, StrategyComparisonMetrics } from "./index.js";
+import type { StrategyName } from "../scoring/pickReviewers.js";
 import { buildMetrics } from "./metrics.js";
 import { escapeHtml } from "./html.js";
 
@@ -45,6 +46,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
   const algorithmSection = renderAlgorithmSection(input.algorithm);
+  const strategySection = renderStrategySection(input.strategyComparison, dir);
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -86,6 +88,7 @@ ${STYLES}
     <nav class="tabs" role="tablist">
       <button class="tab active" type="button" data-tab="overview">Dashboard</button>
       <button class="tab" type="button" data-tab="open-prs">Open PRs</button>
+      <button class="tab" type="button" data-tab="strategies">Strategies</button>
       <button class="tab" type="button" data-tab="how">How it works</button>
     </nav>
 
@@ -147,6 +150,10 @@ ${STYLES}
 
     <div class="tab-panel hidden" id="tab-open-prs">
     ${openPrsSection}
+    </div>
+
+    <div class="tab-panel hidden" id="tab-strategies">
+    ${strategySection}
     </div>
 
     <div class="tab-panel hidden" id="tab-how">
@@ -759,6 +766,169 @@ function renderOpenPrsSection(
     </section>`;
 }
 
+// ---------------------------------------------------------------------------
+// Strategy comparison tab
+// ---------------------------------------------------------------------------
+
+const STRAT_COLORS: Record<StrategyName, string> = {
+  siara: "#3b6df6",
+  whodo: "#e6833a",
+  sofia: "#4f9d69",
+  whoreview: "#9b59b6",
+  meta: "#d1495b",
+};
+
+const STRAT_LABELS: Record<StrategyName, string> = {
+  siara: "Siara (ours)",
+  whodo: "WhoDo",
+  sofia: "Sofia",
+  whoreview: "WhoReview",
+  meta: "Meta",
+};
+
+function renderStrategySection(
+  data: StrategyComparison | undefined,
+  dir: Directory,
+): string {
+  if (!data || data.prs.length === 0) {
+    return `<section>
+      <h2>Strategy comparison</h2>
+      <p class="empty">No comparison data. Run <code>siara compare</code> first to generate it.</p>
+    </section>`;
+  }
+
+  const strategies = data.strategies as StrategyName[];
+
+  // --- KPI cards ---
+  const kpis = data.metrics
+    .map(
+      (m) => `
+    <div class="strat-card">
+      <div class="strat-name" style="color:${STRAT_COLORS[m.strategy] ?? "var(--accent)"}">${escapeHtml(STRAT_LABELS[m.strategy] ?? m.strategy)}</div>
+      <div class="strat-kpis">
+        <div class="strat-kpi"><span class="kpi-label">Gini</span><span class="kpi-value">${m.gini.toFixed(3)}</span></div>
+        <div class="strat-kpi"><span class="kpi-label">Reviewers</span><span class="kpi-value">${m.activeReviewers}</span></div>
+        <div class="strat-kpi"><span class="kpi-label">Max</span><span class="kpi-value">${m.maxLoad}</span></div>
+        <div class="strat-kpi"><span class="kpi-label">Min</span><span class="kpi-value">${m.minLoad}</span></div>
+        <div class="strat-kpi"><span class="kpi-label">Match</span><span class="kpi-value">${m.agreementPct}%</span></div>
+      </div>
+    </div>`,
+    )
+    .join("");
+
+  // --- Load distribution bar chart ---
+  const allLogins = [
+    ...new Set(data.metrics.flatMap((m) => Object.keys(m.loadByPerson))),
+  ].sort();
+  const maxLoad = Math.max(
+    1,
+    ...data.metrics.flatMap((m: StrategyComparisonMetrics) => Object.values(m.loadByPerson)),
+  );
+
+  const barW = 480;
+  const rowH = 22;
+  const groupGap = 10;
+  const labelW = 140;
+  const groupH = strategies.length * rowH + groupGap;
+  const svgH = allLogins.length * groupH + 20;
+
+  const loadBars = allLogins
+    .map((login, gi) => {
+      const gy = gi * groupH;
+      const label = `<text x="${labelW - 8}" y="${gy + (groupH - groupGap) / 2}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(login, dir))}<title>${escapeHtml(personTitle(login, dir))}</title></text>`;
+      const bars = strategies
+        .map((s, si) => {
+          const m = data.metrics.find((x) => x.strategy === s);
+          const v = m?.loadByPerson[login] ?? 0;
+          const w = (v / maxLoad) * barW;
+          const y = gy + si * rowH;
+          const color = STRAT_COLORS[s] ?? "#888";
+          const num =
+            v > 0
+              ? `<text x="${fmt(labelW + w + 4)}" y="${y + (rowH - 3) / 2}" class="svg-count" dominant-baseline="central">${v}</text>`
+              : "";
+          return (
+            `<rect x="${labelW}" y="${y}" width="${fmt(w)}" height="${rowH - 3}" rx="3" fill="${color}" fill-opacity="0.75"><title>${escapeHtml(STRAT_LABELS[s] ?? s)}: ${v}</title></rect>` +
+            num
+          );
+        })
+        .join("");
+      return label + bars;
+    })
+    .join("");
+
+  const legendItems = strategies
+    .map(
+      (s) =>
+        `<li><span class="swatch" style="background:${STRAT_COLORS[s]}"></span>${escapeHtml(STRAT_LABELS[s] ?? s)}</li>`,
+    )
+    .join("");
+
+  const loadChart = svg(
+    labelW + barW + 50,
+    svgH,
+    loadBars,
+    "Load distribution per strategy",
+  );
+
+  // --- Per-PR comparison table ---
+  const headerCells = strategies
+    .map((s) => `<th>${escapeHtml(STRAT_LABELS[s] ?? s)}</th>`)
+    .join("");
+
+  const prRows = data.prs
+    .map((row) => {
+      const short = row.repo.split("/").pop() ?? row.repo;
+      const bandBadge = `<span class="badge" style="background:var(--band-${row.band})">${BAND_LABEL[row.band]}</span>`;
+      const cells = strategies
+        .map((s) => {
+          const pick = row.picks[s] ?? [];
+          const siaraPick = row.picks.siara ?? [];
+          const same =
+            s === "siara" ||
+            (pick.length === siaraPick.length &&
+              pick.every((l) => siaraPick.includes(l)));
+          const cls = s === "siara" ? "" : same ? "strat-same" : "strat-diff";
+          return `<td class="${cls}">${pick.map((l) => escapeHtml(displayName(l, dir))).join(", ") || "—"}</td>`;
+        })
+        .join("");
+      return `<tr>
+        <td class="pr-cell" title="${escapeHtml(row.title)}">
+          <a class="pr-main" href="https://github.com/${escapeHtml(row.repo)}/pull/${row.pr}" target="_blank" rel="noopener noreferrer">${escapeHtml(short)}/${row.pr}</a>
+        </td>
+        <td>${bandBadge} <span class="count">${row.difficulty.toFixed(2)}</span></td>
+        ${cells}
+      </tr>`;
+    })
+    .join("");
+
+  const genAt = data.generatedAt?.slice(0, 10) ?? "";
+
+  return `<section>
+      <h2>Strategy comparison</h2>
+      <p class="section-hint">Side-by-side evaluation of ${strategies.length} reviewer-selection strategies on ${data.totalPrs} open PRs${genAt ? ` (${genAt})` : ""}. Lower Gini = more even workload. Match = agreement with Siara.</p>
+      <div class="strat-grid">${kpis}</div>
+    </section>
+
+    <section>
+      <h2>Load per strategy</h2>
+      <p class="section-hint">How many PRs each strategy would assign to each reviewer. Even bars = fair spread.</p>
+      <ul class="legend">${legendItems}</ul>
+      <div class="scroll-x">${loadChart}</div>
+    </section>
+
+    <section>
+      <h2>Per-PR picks</h2>
+      <p class="section-hint">Who each strategy would assign. <span class="strat-same-dot">Green</span> = same as Siara, <span class="strat-diff-dot">red</span> = different. Click PR to open on GitHub.</p>
+      <div class="scroll-x">
+      <table>
+        <thead><tr><th>PR</th><th>Difficulty</th>${headerCells}</tr></thead>
+        <tbody>${prRows}</tbody>
+      </table>
+      </div>
+    </section>`;
+}
+
 /** Shipped defaults, so the doc renders truthfully even without a config. */
 const DEFAULT_ALGO: NonNullable<DashboardInput["algorithm"]> = {
   reviewersPerPr: 1,
@@ -1110,5 +1280,26 @@ const STYLES = `
     a.pr-main:hover { text-decoration: underline; }
     .pr-org { display: block; font-size: 0.72rem; color: var(--muted); }
     .count { width: 5rem; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+    /* Strategy comparison tab */
+    .strat-grid { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .strat-card {
+      flex: 1 1 180px; min-width: 180px;
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.9rem 1rem;
+    }
+    .strat-name {
+      font-size: 0.9rem; font-weight: 650; margin-bottom: 0.5rem;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .strat-kpis { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; }
+    .strat-kpi { display: flex; flex-direction: column; }
+    .strat-kpi .kpi-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--muted); letter-spacing: 0.04em; }
+    .strat-kpi .kpi-value { font-size: 1.1rem; font-weight: 680; font-variant-numeric: tabular-nums; }
+    td.strat-same { background: #e8f5e9; }
+    td.strat-diff { background: #fce4ec; }
+    .strat-same-dot { color: #2e7d32; font-weight: 600; }
+    .strat-diff-dot { color: #c62828; font-weight: 600; }
+    .svg-count { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 
     footer { margin-top: 2rem; font-size: 0.82rem; color: var(--muted); text-align: center; }`;
