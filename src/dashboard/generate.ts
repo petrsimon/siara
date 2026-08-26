@@ -2,7 +2,7 @@ import type { Assignment, DifficultyBand, OpenPrSnapshot, ReviewResponse } from 
 import type { DashboardInput, DashboardMetrics } from "./index.js";
 import { buildMetrics } from "./metrics.js";
 import { escapeHtml } from "./html.js";
-import { renderAgeDistribution, renderDifficultyAgeScatter, CHART_STYLES } from "./charts.js";
+import { renderAgeDistribution, renderDifficultyAgeScatter, renderWaitingDistribution, CHART_STYLES } from "./charts.js";
 
 const BANDS = ["simple", "moderate", "hard"] as const;
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -41,7 +41,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const heatmap = renderHeatmap(input.assignments, dir);
   const sankeySection = renderSankey(metrics, dir);
   const openPrs = input.openPrs?.prs ?? [];
-  const waitingSection = renderWaitingSection(openPrs, dir);
+  const waitingSection = renderWaitingDistribution(openPrs, dir);
   const responseSection = renderResponseSection(input.responseTimes?.responses ?? [], dir);
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
@@ -571,51 +571,6 @@ function renderSankey(metrics: DashboardMetrics, dir: Directory): string {
     </section>`;
 }
 
-/** Per-reviewer waiting stats: how long they leave open PRs waiting (count, avg,
- *  max age in days) — derived from the point-in-time open-PRs snapshot. */
-function renderWaitingSection(openPrs: OpenPrSnapshot[], dir: Directory): string {
-  const byReviewer = new Map<string, number[]>();
-  for (const pr of openPrs) {
-    if (pr.ageDays === undefined) continue;
-    for (const login of pr.assignees) {
-      const list = byReviewer.get(login) ?? [];
-      list.push(pr.ageDays);
-      byReviewer.set(login, list);
-    }
-  }
-  if (byReviewer.size === 0) {
-    return `<section><h2>Waiting on reviewers</h2><p class="empty">No open PRs with a known age.</p></section>`;
-  }
-  const rows = [...byReviewer.entries()]
-    .map(([login, ages]) => {
-      const max = Math.max(...ages);
-      const avg = ages.reduce((s, a) => s + a, 0) / ages.length;
-      return { login, open: ages.length, avg, max };
-    })
-    .sort((a, b) => (b.max !== a.max ? b.max - a.max : b.open - a.open));
-
-  const body = rows
-    .map(
-      (r) => `
-        <tr>
-          <td class="login">${personCell(r.login, dir)}</td>
-          <td class="count">${r.open}</td>
-          <td class="count">${r.avg.toFixed(1)}d</td>
-          <td class="count">${r.max}d</td>
-        </tr>`,
-    )
-    .join("");
-  return `<section>
-      <h2>Waiting on reviewers</h2>
-      <p class="section-hint">Open PRs currently assigned to each reviewer and how long they've been waiting (point-in-time snapshot).</p>
-      <table>
-        <thead>
-          <tr><th>Reviewer</th><th>Open PRs</th><th>Avg age</th><th>Oldest</th></tr>
-        </thead>
-        <tbody>${body}</tbody>
-      </table>
-    </section>`;
-}
 
 /** Median of a non-empty numeric list. */
 function median(xs: number[]): number {

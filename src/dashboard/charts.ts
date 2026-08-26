@@ -309,6 +309,119 @@ Age: ${pr.ageDays}d</title></circle>`;
     </section>`;
 }
 
+/**
+ * Per-reviewer waiting time distribution as horizontal box plots.
+ * Each reviewer gets a box showing: min, Q1, median, Q3, max, outliers.
+ */
+export function renderWaitingDistribution(
+  openPrs: OpenPrSnapshot[],
+  dir: Record<string, { name?: string; email?: string }>
+): string {
+  const byReviewer = new Map<string, number[]>();
+  for (const pr of openPrs) {
+    if (pr.ageDays === undefined) continue;
+    for (const login of pr.assignees) {
+      const list = byReviewer.get(login) ?? [];
+      list.push(pr.ageDays);
+      byReviewer.set(login, list);
+    }
+  }
+  
+  if (byReviewer.size === 0) {
+    return `<section><h2>Waiting on reviewers</h2><p class="empty">No open PRs with a known age.</p></section>`;
+  }
+
+  // Sort reviewers by max age (longest wait first)
+  const reviewers = [...byReviewer.entries()]
+    .map(([login, ages]) => ({ login, ages }))
+    .sort((a, b) => Math.max(...b.ages) - Math.max(...a.ages));
+  
+  const W = 640;
+  const rowH = 32;
+  const labelW = 140;
+  const padR = 30;
+  const padT = 20;
+  const padB = 30;
+  const plotW = W - labelW - padR;
+  const H = reviewers.length * rowH + padT + padB;
+  
+  // Find global max for consistent scale
+  const globalMax = Math.max(...reviewers.flatMap(r => r.ages));
+  
+  const boxes = reviewers.map((r, i) => {
+    const stats = quartiles(r.ages);
+    const y = padT + i * rowH;
+    const boxY = y + 6;
+    const boxH = 20;
+    const centerY = boxY + boxH / 2;
+    
+    // Scale to plot width
+    const x = (val: number) => labelW + (val / globalMax) * plotW;
+    
+    const minVal = Math.min(...r.ages);
+    const maxVal = Math.max(...r.ages);
+    
+    // Outliers (beyond fences)
+    const outlierPoints = r.ages
+      .filter(a => a < stats.lowerFence || a > stats.upperFence)
+      .map(a => {
+        const cx = x(a);
+        return `<circle cx="${fmt(cx)}" cy="${centerY}" r="2.5" fill="var(--band-hard)" fill-opacity="0.8"><title>${escapeHtml(displayName(r.login, dir))}: ${a}d (outlier)</title></circle>`;
+      })
+      .join("");
+    
+    // Whiskers: from min (or lower fence) to max (or upper fence)
+    const whiskerMin = Math.max(minVal, stats.lowerFence);
+    const whiskerMax = Math.min(maxVal, stats.upperFence);
+    const whisker = `<line x1="${fmt(x(whiskerMin))}" y1="${centerY}" x2="${fmt(x(whiskerMax))}" y2="${centerY}" stroke="var(--muted)" stroke-width="1.5"/>`;
+    
+    // Box: Q1 to Q3
+    const boxX = x(stats.q1);
+    const boxW = x(stats.q3) - boxX;
+    const box = `<rect x="${fmt(boxX)}" y="${boxY}" width="${fmt(boxW)}" height="${boxH}" fill="var(--accent)" fill-opacity="0.3" stroke="var(--accent)" stroke-width="1.5" rx="2"><title>${escapeHtml(displayName(r.login, dir))}
+Q1: ${stats.q1.toFixed(1)}d, Median: ${stats.median.toFixed(1)}d, Q3: ${stats.q3.toFixed(1)}d
+${r.ages.length} open PRs</title></rect>`;
+    
+    // Median line
+    const medX = x(stats.median);
+    const medLine = `<line x1="${fmt(medX)}" y1="${boxY}" x2="${fmt(medX)}" y2="${boxY + boxH}" stroke="var(--band-hard)" stroke-width="2"/>`;
+    
+    // Label
+    const label = `<text x="${labelW - 10}" y="${centerY}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(r.login, dir))} <tspan class="svg-count">(${r.ages.length})</tspan><title>${escapeHtml(personTitle(r.login, dir))}</title></text>`;
+    
+    return label + whisker + box + medLine + outlierPoints;
+  }).join("");
+  
+  // X-axis ticks
+  const tickVals = [0, Math.round(globalMax / 4), Math.round(globalMax / 2), Math.round(3 * globalMax / 4), globalMax];
+  const xTicks = tickVals.map(val => {
+    const tickX = labelW + (val / globalMax) * plotW;
+    return `<text x="${fmt(tickX)}" y="${H - 10}" class="svg-tick" text-anchor="middle">${val}d</text>`;
+  }).join("");
+  
+  // Axis line
+  const axis = `<line x1="${labelW}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="var(--border)" stroke-width="1"/>`;
+  
+  const chart = svg(W, H, boxes + axis + xTicks, "Waiting time distribution per reviewer");
+  
+  return `<section>
+      <h2>Waiting on reviewers</h2>
+      <p class="section-hint">Distribution of PR ages currently assigned to each reviewer. Box shows quartiles (median = thick line), whiskers extend to 1.5×IQR, outliers shown as dots. Sorted by longest wait.</p>
+      ${chart}
+    </section>`;
+}
+
+/** Display label for a reviewer: real name if known, else the login. */
+function displayName(login: string, dir: Record<string, { name?: string; email?: string }>): string {
+  return dir[login]?.name?.trim() || login;
+}
+
+/** Tooltip text for a reviewer: login (nick) plus email when known. */
+function personTitle(login: string, dir: Record<string, { name?: string; email?: string }>): string {
+  const email = dir[login]?.email?.trim();
+  return email ? `${login} · ${email}` : login;
+}
+
 /** Additional CSS for new charts. */
 export const CHART_STYLES = `
     .chart-title {
