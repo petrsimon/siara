@@ -238,6 +238,47 @@ describe("pickReviewers", () => {
     });
   });
 
+  describe("expert + learner pairing", () => {
+    it("pairs the expert with the lowest-familiarity IC and excludes managers on a moderate PR", () => {
+      const commits = Object.fromEntries(hardFiles().map((f) => [f.path, 8]));
+      const result = pickReviewers({
+        pr: pullRequest({ author: "author", files: moderateFiles() }),
+        config: testConfig({
+          roster: ["expert", "boss", "learner"],
+          managers: ["boss"],
+          reviewersPerPr: 2,
+        }),
+        candidates: [
+          // expert and boss both have deep knowledge; learner has none.
+          candidate("expert", { commitsByPath: commits }),
+          candidate("boss", { commitsByPath: commits }),
+          candidate("learner"),
+        ],
+        nowIso: NOW,
+      });
+
+      expect(result.assignees).toHaveLength(2);
+      expect(result.assignees).toContain("expert");
+      // The manager (boss) must NOT take the learner slot even though they rank
+      // second by knowledge; the fresh learner does, so knowledge distributes.
+      expect(result.assignees).toContain("learner");
+      expect(result.assignees).not.toContain("boss");
+    });
+
+    it("keeps the pure education path (top-N) for a simple, low-risk PR", () => {
+      const result = pickReviewers(
+        pickInput({
+          config: { reviewersPerPr: 2 },
+          pr: { files: simpleFiles() },
+        }),
+      );
+
+      expect(result.assignees).toEqual(
+        result.ranked.slice(0, 2).map((c) => c.login),
+      );
+    });
+  });
+
   describe("empty eligible pool", () => {
     it("returns no assignees when nobody is eligible", () => {
       const result = pickReviewers(

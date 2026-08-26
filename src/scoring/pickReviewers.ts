@@ -206,7 +206,12 @@ export function pickReviewers(input: PickInput): PickResult {
     );
   });
 
-  const assignees = selectAssignees(ranked, filesAtRisk.atRiskCount, config);
+  const assignees = selectAssignees(
+    ranked,
+    filesAtRisk.atRiskCount,
+    difficulty.band,
+    config,
+  );
 
   return {
     difficulty,
@@ -218,13 +223,21 @@ export function pickReviewers(input: PickInput): PickResult {
 }
 
 /**
- * Pick the top N reviewers. When files are at risk, reviewersPerPr >= 2, and
- * pairWithExpert is on, guarantee the set pairs the highest-knowledge expert
- * with a spread-boosted learner so knowledge actually propagates.
+ * Pick the top N reviewers. When reviewersPerPr >= 2 and pairWithExpert is on,
+ * pair the highest-knowledge expert with a genuine *learner* — the lowest-
+ * familiarity eligible IC — so knowledge propagates to a new reviewer and the
+ * bus factor grows. Managers are excluded from the learner slot: they already
+ * carry broad context, so pairing with them wouldn't distribute knowledge.
+ *
+ * Pairing only kicks in where it adds value: on knowledge-routed bands
+ * (moderate/hard), which would otherwise stack the sole expert, and on any band
+ * touching at-risk files (which needs an expert present). Simple, low-risk PRs
+ * stay on the pure education path — top-N lowest-familiarity, no expert forcing.
  */
 function selectAssignees(
   ranked: ScoredCandidate[],
   atRiskCount: number,
+  band: DifficultyResult["band"],
   config: ResolvedConfig,
 ): string[] {
   const n = Math.min(config.reviewersPerPr, ranked.length);
@@ -233,14 +246,28 @@ function selectAssignees(
   const topN = ranked.slice(0, n).map((c) => c.login);
 
   const shouldPair =
-    atRiskCount > 0 && config.filesAtRisk.pairWithExpert && n >= 2;
+    config.filesAtRisk.pairWithExpert &&
+    n >= 2 &&
+    (band !== "simple" || atRiskCount > 0);
   if (!shouldPair) return topN;
 
-  // Ensure the highest-knowledge expert is present alongside the top learner.
   const expert = [...ranked].sort((a, b) => b.knowledge - a.knowledge)[0];
-  if (expert && !topN.includes(expert.login)) {
-    // Replace the weakest of the top-N with the expert to form the pair.
-    topN[topN.length - 1] = expert.login;
+  const managers = new Set(config.managers);
+  // Learner = lowest-familiarity non-manager IC. Fall back to the best-ranked
+  // non-expert if every non-manager is exhausted, so a small team still fills n.
+  const learner =
+    [...ranked]
+      .filter((c) => c.login !== expert?.login && !managers.has(c.login))
+      .sort((a, b) => a.familiarity - b.familiarity)[0] ??
+    ranked.find((c) => c.login !== expert?.login);
+
+  const pair: string[] = [];
+  if (expert) pair.push(expert.login);
+  if (learner && !pair.includes(learner.login)) pair.push(learner.login);
+  // Top up to n (reviewersPerPr > 2) with the next-best ranked not yet chosen.
+  for (const c of ranked) {
+    if (pair.length >= n) break;
+    if (!pair.includes(c.login)) pair.push(c.login);
   }
-  return topN;
+  return pair.slice(0, n);
 }
