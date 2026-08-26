@@ -1,6 +1,7 @@
 import type { Assignment, DifficultyBand, OpenPrSnapshot } from "../types.js";
 import type { DashboardInput, DashboardMetrics, StrategyComparison, StrategyComparisonMetrics } from "./index.js";
 import type { StrategyName } from "../scoring/pickReviewers.js";
+import { DEFAULT_TEAM_CONFIG } from "../config.js";
 import { buildMetrics, historyAssignments } from "./metrics.js";
 import { escapeHtml } from "./html.js";
 import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution, CHART_STYLES } from "./charts.js";
@@ -54,7 +55,10 @@ export function renderDashboardHtml(input: DashboardInput): string {
   );
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
-  const algorithmSection = renderAlgorithmSection(input.algorithm);
+  const algorithmSection = renderAlgorithmSection(
+    input.algorithm,
+    input.strategyComparison,
+  );
   const strategySection = renderStrategySection(input.strategyComparison, dir);
   const ageDistSection = renderAgeDistribution(openPrs);
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
@@ -900,29 +904,72 @@ function stageBox(
   );
 }
 
+/** Live benchmark rows for the How-it-works tab (from `siara compare`). */
+function renderBenchmarkBlock(data: StrategyComparison | undefined): string {
+  if (!data || data.metrics.length === 0) {
+    return `<p class="algo-p">Run <code>siara compare</code> to populate live open-PR benchmark numbers — the <em>Strategies</em> tab shows the full side-by-side view.</p>`;
+  }
+
+  const strategies = data.strategies as StrategyName[];
+  const baseline = strategyBaseline(strategies);
+  const baselineLabel = STRAT_LABELS[baseline] ?? baseline;
+  const ordered = [
+    baseline,
+    ...strategies.filter((s) => s !== baseline),
+  ];
+  const byStrategy = new Map(data.metrics.map((m) => [m.strategy, m]));
+
+  const rows = ordered
+    .map((s) => {
+      const m = byStrategy.get(s);
+      if (!m) return "";
+      const isMain = s === baseline;
+      return `<tr${isMain ? ' class="strat-row-main"' : ""}>
+        <td class="login">${escapeHtml(STRAT_LABELS[s] ?? s)}${isMain ? " <span class=\"count\">(live)</span>" : ""}</td>
+        <td class="count">${m.gini.toFixed(3)}</td>
+        <td class="count">${m.activeReviewers}</td>
+        <td class="count">${m.maxLoad}</td>
+        <td class="count">${isMain ? "—" : `${m.agreementPct}%`}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const genAt = data.generatedAt?.slice(0, 10) ?? "";
+  return `<p class="algo-p">Side-by-side on <strong>${data.totalPrs} open PRs</strong>${genAt ? ` (${escapeHtml(genAt)})` : ""}. <strong>${escapeHtml(baselineLabel)}</strong> is the live strategy — lower Gini = more even spread. Match = agreement with ${escapeHtml(baselineLabel)}.</p>
+      <table>
+        <thead><tr><th>Strategy</th><th>Gini</th><th>Reviewers</th><th>Max load</th><th>Match</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+}
+
 /**
  * "How it works" — the scoring pipeline as a left→right diagram plus a prose
  * explanation of the fairness policy, with the LIVE knob values so the doc can't
- * drift from the running config. Grounded in the load-balancing literature the
- * policy is drawn from (WhoDo, Sofia).
+ * drift from the running config.
  */
 function renderAlgorithmSection(
   algo: DashboardInput["algorithm"],
+  strategyComparison?: StrategyComparison,
 ): string {
   const a = algo ?? DEFAULT_ALGO;
   const av = a.availability;
+  const fu = DEFAULT_TEAM_CONFIG.followUpAffinity;
+  const far = DEFAULT_TEAM_CONFIG.filesAtRisk;
+  const soft = DEFAULT_TEAM_CONFIG.soft;
+  const liveLabel = STRAT_LABELS[MAIN_STRATEGY] ?? MAIN_STRATEGY;
 
   const stages: Array<[string, string]> = [
     ["PR", "diff + paths"],
     ["Difficulty", "size × risk"],
     ["Band", "simple/mod/hard"],
     ["Route", "by band"],
+    ["Boosts", "continuity + FaR"],
     ["Penalty", "load (decoupled)"],
-    ["Top-K", `pick from top 5`],
+    ["Top-K", "pick from top 5"],
   ];
   const W = 640;
   const boxH = 46;
-  const boxW = 92;
+  const boxW = 76;
   const gap = (W - stages.length * boxW) / (stages.length - 1);
   const y = 8;
   let px = 0;
@@ -942,7 +989,6 @@ function renderAlgorithmSection(
   const defs = `<defs><marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>`;
   const diagram = svg(W, boxH + 16, defs + arrows.join("") + boxes.join(""), "Scoring pipeline");
 
-  // Band-routing rows.
   const routing = `
     <table>
       <thead><tr><th>Band</th><th>Boundary</th><th>Who wins</th><th>Why</th></tr></thead>
@@ -953,50 +999,65 @@ function renderAlgorithmSection(
       </tbody>
     </table>`;
 
+  const benchmark = renderBenchmarkBlock(strategyComparison);
+
   return `<section>
       <h2>How it works</h2>
-      <p class="section-hint">Deterministic, no LLM: identical inputs always produce identical assignments (ties broken by a seeded dice). Below are the live scoring knobs — this doc tracks the running config.</p>
+      <p class="section-hint">Deterministic, no LLM: identical inputs always produce identical assignments (ties broken by a seeded dice). The live strategy is <strong>${escapeHtml(liveLabel)}</strong> — score floor, decoupled load penalty, and top-5 spread (the CLI runs it as <code>siara</code>). Knobs below reflect the config used when this dashboard was generated.</p>
       ${diagram}
       <h3 class="algo-h3">1 · Difficulty → band</h3>
       <p class="algo-p">Each PR gets a 0–1 difficulty from churn, file count, and directory spread, then multiplied up for risky paths (auth, crypto, migrations, secrets…). The score falls into a band that decides <em>how</em> to route:</p>
       ${routing}
       <h3 class="algo-h3">2 · Score floor (simple band)</h3>
-      <p class="algo-p">On simple PRs, the education path scores <code>max(0.35, 1 − familiarity)</code>. Without the floor, experts get score 0 on familiar code, which makes the availability penalty irrelevant and piles all simple work on the same few newcomers. The floor keeps experts scoreable so load pressure can redistribute simple PRs across the team.</p>
-      <h3 class="algo-h3">3 · Decoupled availability penalty</h3>
-      <p class="algo-p">Each candidate's score is reduced by <code>bandWeight[band] × (loadWeight·openLoad + busyWeight·jiraBusy + managerPenalty + hardWIP)</code>, capped at <strong>${Math.round(av.maxPenaltyFraction * 100)}%</strong> of <code>1.0</code> (not the candidate's own score). This decoupling means load pressure works equally on all candidates regardless of band — a busy expert on a simple PR feels the same penalty as a busy expert on a hard PR. PTO adds a large uncapped penalty on top. Live weights: load <code>${av.loadWeight}</code>/open review, busy <code>${av.busyWeight}</code>/unit, band scaling simple <code>${av.bandWeight.simple}</code> · moderate <code>${av.bandWeight.moderate}</code> · hard <code>${av.bandWeight.hard}</code>.</p>
-      <h3 class="algo-h3">4 · Top-K selection (anti-bystander)</h3>
-      <p class="algo-p">Instead of always picking the #1 ranked candidate, assignments are drawn randomly (seeded dice, deterministic) from the <strong>top 5</strong> candidates. This spreads work across viable reviewers and prevents one person from monopolising reviews even when they consistently rank highest. Inspired by Meta's RevRecV2 (FSE'24).</p>
-      <h3 class="algo-h3">5 · Fairness: spread low-risk, cap high-risk</h3>
-      <p class="algo-p">Simple PRs (the bulk) are spread by load so no one sweeps a repo — that's why <code>bandWeight.simple</code> is high. Hard PRs still go to experts, but a <strong>WIP cap</strong> stops one expert being bombarded: past <code>${av.hardWipLimit}</code> concurrent hard reviews, each extra adds <code>${av.hardWipPenalty}</code> penalty so the 4th+ overflows to the next expert — yet, being inside the ${Math.round(av.maxPenaltyFraction * 100)}% cap, a hard PR is never dumped on a zero-knowledge stranger. Model: expertise + workload balancing (Asthana et&nbsp;al., <em>WhoDo</em>, FSE'19) with knowledge distribution (Mirsaeedi &amp; Rigby, <em>Sofia</em>, ICSE'20).</p>
-      <p class="algo-p">Candidates are ranked by final score → open load → seeded dice, and the top ${a.reviewersPerPr} drawn from the top-5 pool. The <em>Assignment history</em> and <em>Assignment flow</em> charts show the result; <em>Gini (workload)</em> quantifies how even it is.</p>
-      <h3 class="algo-h3">6 · Comparison with academic algorithms</h3>
-      <p class="algo-p">Siara's scoring is benchmarked against four published reviewer-recommendation algorithms. The <em>Strategies</em> tab shows a live side-by-side comparison; here's how they differ in design and how they perform on this team's open PRs:</p>
+      <p class="algo-p">On simple PRs, the education path scores <code>max(0.35, 1 − familiarity)</code>. Without the floor, experts score 0 on familiar code, which makes the availability penalty irrelevant and piles all simple work on the same few newcomers. The floor keeps experts scoreable so load pressure can redistribute simple PRs across the team.</p>
+      <h3 class="algo-h3">3 · Continuity boosts</h3>
+      <p class="algo-p">Small additive nudges — never gates — applied after band routing:</p>
+      <ul class="algo-list">
+        <li><strong>Follow-up affinity</strong> — reviewers who recently touched the same branch family or Jira epic within ${fu.windowDays}d get up to <code>+${fu.branchFamilyBoost}</code> / <code>+${fu.epicBoost}</code> (diminishing with each hit).</li>
+        <li><strong>Files at risk</strong> — spreads ownership: non-owners of touched files get <code>+${far.spreadBoost}</code> so one expert doesn't absorb every change in a repo.</li>
+      </ul>
+      <h3 class="algo-h3">4 · Jira soft boosts</h3>
+      <p class="algo-p">When a linked Jira ticket is present: high story-point estimates (≥5) nudge above-median experts by <code>+${soft.estimateExpertBoost}</code>; high/blocker priority nudges experts by <code>+${soft.priorityExpertBoost}</code> and penalises already-loaded reviewers (≥3 open) by <code>−${soft.highPriorityLoadPenalty}</code>. These never change the difficulty band.</p>
+      <h3 class="algo-h3">5 · Decoupled availability penalty</h3>
+      <p class="algo-p">Each candidate's score is reduced by <code>bandWeight[band] × (loadWeight·openLoad + busyWeight·jiraBusy + managerPenalty + hardWIP)</code>, capped at <strong>${Math.round(av.maxPenaltyFraction * 100)}%</strong> of <code>1.0</code> (not the candidate's own score). Load pressure works equally on all candidates regardless of band. PTO adds a large uncapped penalty on top. Live weights: load <code>${av.loadWeight}</code>/open review, busy <code>${av.busyWeight}</code>/unit, band scaling simple <code>${av.bandWeight.simple}</code> · moderate <code>${av.bandWeight.moderate}</code> · hard <code>${av.bandWeight.hard}</code>.</p>
+      <h3 class="algo-h3">6 · Top-K selection (anti-bystander)</h3>
+      <p class="algo-p">Instead of always picking the #1 ranked candidate, assignments are drawn randomly (seeded dice, deterministic) from the <strong>top 5</strong>. This spreads work across viable reviewers and prevents one person from monopolising reviews even when they consistently rank highest. Inspired by Meta's RevRecV2 (FSE'24), which uses a top-3 pool; Siara widens to top-5 for more spread.</p>
+      <h3 class="algo-h3">7 · Fairness: spread low-risk, cap high-risk</h3>
+      <p class="algo-p">Simple PRs (the bulk) are spread by load — that's why <code>bandWeight.simple</code> is high. Hard PRs still go to experts, but a <strong>WIP cap</strong> stops one expert being bombarded: past <code>${av.hardWipLimit}</code> concurrent hard reviews, each extra adds <code>${av.hardWipPenalty}</code> penalty so the ${av.hardWipLimit + 1}th+ overflows to the next expert. Model: expertise + workload balancing (<em>WhoDo</em>, FSE'19) with knowledge distribution (<em>Sofia</em>, ICSE'20).</p>
+      <p class="algo-p">Candidates are ranked by final score → open load → seeded dice; the top ${a.reviewersPerPr} reviewer(s) are drawn from the top-5 pool. See <em>Review assignments</em> (History tab) and <em>Assignment flow</em> for the outcome; <em>Gini (workload)</em> quantifies how even it is.</p>
+      <h3 class="algo-h3">8 · Comparison with other strategies</h3>
+      <p class="algo-p">The live scorer is benchmarked against published algorithms and earlier Siara variants (score-floor A/B, blend routing, load-only penalty, legacy top-1 <code>siara</code>, etc.). Design differences:</p>
       <table>
-        <thead><tr><th>Strategy</th><th>Core idea</th><th>Limitation addressed by Siara</th></tr></thead>
+        <thead><tr><th>Strategy</th><th>Core idea</th><th>What ${escapeHtml(liveLabel)} adds</th></tr></thead>
         <tbody>
           <tr>
             <td class="login">WhoDo</td>
-            <td>expertise / (1 + α·load) — divides knowledge by a load discount (Asthana et&nbsp;al., FSE'19)</td>
-            <td>No difficulty routing — treats simple and hard PRs identically, so newcomers never get learning opportunities on safe changes</td>
+            <td>expertise / (1 + α·load) (Asthana et&nbsp;al., FSE'19)</td>
+            <td>Difficulty routing + score floor — newcomers get safe PRs, experts aren't the only scoreable candidates on simple work</td>
           </tr>
           <tr>
             <td class="login">Sofia</td>
-            <td>expertise + files-at-risk spread + Gini-aware load (Mirsaeedi &amp; Rigby, ICSE'20)</td>
-            <td>Better spread via FaR, but no band routing and no score floor — experts on simple PRs still dominate</td>
+            <td>expertise + files-at-risk + Gini-aware load (Mirsaeedi &amp; Rigby, ICSE'20)</td>
+            <td>Band routing and decoupled penalty — FaR spread without experts dominating every simple PR</td>
           </tr>
           <tr>
             <td class="login">WhoReview</td>
             <td>expertise + collaboration affinity + load (Ouni et&nbsp;al., 2021)</td>
-            <td>Collaboration signal helps continuity but concentrates reviews on a tight author↔reviewer circle</td>
+            <td>Load pressure on all bands — continuity helps but doesn't lock a tight author↔reviewer circle</td>
           </tr>
           <tr>
             <td class="login">Meta RevRecV2</td>
-            <td>Siara scoring + random-from-top-K anti-bystander (Meta, FSE'24)</td>
-            <td>Closest to Siara — the top-K idea came from here. Uses top-3 pool; Siara uses top-5 for wider spread</td>
+            <td>scoring + random-from-top-K anti-bystander (Meta, FSE'24)</td>
+            <td>Band routing, score floor, and top-5 pool (Meta uses top-3)</td>
+          </tr>
+          <tr>
+            <td class="login">siara (legacy)</td>
+            <td>original top-1 band routing without floor or decoupled penalty</td>
+            <td>${escapeHtml(liveLabel)} adds the floor, decoupled penalty, and top-5 spread — see Strategies tab for divergence</td>
           </tr>
         </tbody>
       </table>
-      <p class="algo-p">On this team's workload, Siara achieves a Gini of ~0.36 (vs WhoDo 0.50, Sofia 0.49, WhoReview 0.44, Meta 0.39) with 9 active reviewers and a max load of 30 (vs 44–67 for the academic baselines). The key drivers: score floor keeps experts in the simple-band pool, decoupled penalty makes load pressure uniform, and top-5 selection spreads assignments across viable candidates.</p>
+      ${benchmark}
     </section>`;
 }
 
@@ -1362,6 +1423,12 @@ const STYLES = `
       font-size: 0.82em; background: var(--bg); border: 1px solid var(--border);
       border-radius: 4px; padding: 0.05rem 0.3rem; font-variant-numeric: tabular-nums;
     }
+    .algo-list {
+      margin: 0 0 0.6rem; padding-left: 1.2rem;
+      font-size: 0.86rem; color: var(--text);
+    }
+    .algo-list li { margin-bottom: 0.35rem; }
+    tr.strat-row-main { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
     table { width: 100%; border-collapse: collapse; }
     th, td {
