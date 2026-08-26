@@ -50,7 +50,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const strategySection = renderStrategySection(input.strategyComparison, dir);
   const ageDistSection = renderAgeDistribution(openPrs);
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
-  const currentStateSection = renderCurrentState(openPrs, input.assignments, dir, staleness, input.generatedAtIso);
+  const currentStateSection = renderCurrentState(openPrs, dir);
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -121,8 +121,8 @@ ${STYLES}
     ${currentStateSection}
 
     <section>
-      <h2>Reviews per person</h2>
-      <p class="section-hint">Volume and difficulty mix per reviewer — height of the hard band shows who carries the risk, not just the count.</p>
+      <h2>Assignment history</h2>
+      <p class="section-hint">Cumulative assignments over time — shows the total volume and difficulty mix each reviewer has received. Height of the hard band shows who carries the risk, not just the count.</p>
       ${renderLegend()}
       ${perPersonChart}
     </section>
@@ -320,7 +320,7 @@ function renderPerPersonChart(metrics: DashboardMetrics, dir: Directory): string
     })
     .join("");
 
-  return svg(W, height, body, "Reviews per person, stacked by difficulty band");
+  return svg(W, height, body, "Assignment history per person, stacked by difficulty band");
 }
 
 /** Donut chart of the overall difficulty band distribution. */
@@ -735,20 +735,30 @@ function renderOpenPrsSection(
 // Strategy comparison tab
 // ---------------------------------------------------------------------------
 
-const STRAT_COLORS: Record<StrategyName, string> = {
+const STRAT_COLORS: Record<string, string> = {
   siara: "#3b6df6",
-  whodo: "#e6833a",
-  sofia: "#4f9d69",
-  whoreview: "#9b59b6",
-  meta: "#d1495b",
+  "siara-floor": "#e6833a",
+  "siara-blend": "#4f9d69",
+  "siara-load": "#9b59b6",
+  "siara-v2": "#d1495b",
+  "siara-noedu": "#16a085",
+  whodo: "#f39c12",
+  sofia: "#8e44ad",
+  whoreview: "#e74c3c",
+  meta: "#34495e",
 };
 
-const STRAT_LABELS: Record<StrategyName, string> = {
-  siara: "Siara (ours)",
-  whodo: "WhoDo",
-  sofia: "Sofia",
-  whoreview: "WhoReview",
-  meta: "Meta",
+const STRAT_LABELS: Record<string, string> = {
+  siara: "siara",
+  "siara-floor": "siara-floor",
+  "siara-blend": "siara-blend",
+  "siara-load": "siara-load",
+  "siara-v2": "siara-v2",
+  "siara-noedu": "siara-noedu",
+  whodo: "whodo",
+  sofia: "sofia",
+  whoreview: "whoreview",
+  meta: "meta",
 };
 
 function renderStrategySection(
@@ -993,7 +1003,7 @@ function renderAlgorithmSection(
       <p class="algo-p">Instead of always picking the #1 ranked candidate, assignments are drawn randomly (seeded dice, deterministic) from the <strong>top 5</strong> candidates. This spreads work across viable reviewers and prevents one person from monopolising reviews even when they consistently rank highest. Inspired by Meta's RevRecV2 (FSE'24).</p>
       <h3 class="algo-h3">5 · Fairness: spread low-risk, cap high-risk</h3>
       <p class="algo-p">Simple PRs (the bulk) are spread by load so no one sweeps a repo — that's why <code>bandWeight.simple</code> is high. Hard PRs still go to experts, but a <strong>WIP cap</strong> stops one expert being bombarded: past <code>${av.hardWipLimit}</code> concurrent hard reviews, each extra adds <code>${av.hardWipPenalty}</code> penalty so the 4th+ overflows to the next expert — yet, being inside the ${Math.round(av.maxPenaltyFraction * 100)}% cap, a hard PR is never dumped on a zero-knowledge stranger. Model: expertise + workload balancing (Asthana et&nbsp;al., <em>WhoDo</em>, FSE'19) with knowledge distribution (Mirsaeedi &amp; Rigby, <em>Sofia</em>, ICSE'20).</p>
-      <p class="algo-p">Candidates are ranked by final score → open load → seeded dice, and the top ${a.reviewersPerPr} drawn from the top-5 pool. The <em>Reviews per person</em> and <em>Assignment flow</em> charts show the result; <em>Gini (workload)</em> quantifies how even it is.</p>
+      <p class="algo-p">Candidates are ranked by final score → open load → seeded dice, and the top ${a.reviewersPerPr} drawn from the top-5 pool. The <em>Assignment history</em> and <em>Assignment flow</em> charts show the result; <em>Gini (workload)</em> quantifies how even it is.</p>
       <h3 class="algo-h3">6 · Comparison with academic algorithms</h3>
       <p class="algo-p">Siara's scoring is benchmarked against four published reviewer-recommendation algorithms. The <em>Strategies</em> tab shows a live side-by-side comparison; here's how they differ in design and how they perform on this team's open PRs:</p>
       <table>
@@ -1084,32 +1094,16 @@ function renderOverridesSection(input: DashboardInput, overrides: DashboardInput
 }
 
 /**
- * Current assignment state: per-reviewer open PR count, band breakdown, and
- * average age. Built from the live open-PRs snapshot — shows "right now", not
- * cumulative history.
+ * Current assignment state: per-reviewer open PR count and band breakdown.
+ * Built from the live open-PRs snapshot — shows "right now", not cumulative history.
  */
 function renderCurrentState(
   openPrs: OpenPrSnapshot[],
-  assignments: Assignment[],
   dir: Directory,
-  staleness: { warningDays: number; overdueDays: number },
-  nowIso: string,
 ): string {
   if (openPrs.length === 0) {
     return `<section><h2>Current assignments</h2><p class="empty">No open PRs in the latest snapshot.</p></section>`;
   }
-
-  // Build lookup: (repo, pr) → assignment date (ISO) per assignee.
-  const assignedAt = new Map<string, string>();
-  for (const a of assignments) {
-    for (const login of a.assignees) {
-      assignedAt.set(`${a.repo}#${a.pr}#${login}`, a.date);
-    }
-  }
-
-  const nowMs = new Date(nowIso).getTime();
-  const daysSince = (iso: string): number =>
-    Math.max(0, Math.floor((nowMs - new Date(iso).getTime()) / 86_400_000));
 
   interface ReviewerState {
     login: string;
@@ -1117,8 +1111,6 @@ function renderCurrentState(
     simple: number;
     moderate: number;
     hard: number;
-    waitDays: number[];
-    overdue: number;
   }
 
   const byReviewer = new Map<string, ReviewerState>();
@@ -1130,18 +1122,9 @@ function renderCurrentState(
         simple: 0,
         moderate: 0,
         hard: 0,
-        waitDays: [],
-        overdue: 0,
       };
       s.total++;
       if (pr.band) s[pr.band]++;
-      const key = `${pr.repo}#${pr.pr}#${login}`;
-      const aDate = assignedAt.get(key);
-      if (aDate) {
-        const wait = daysSince(aDate);
-        s.waitDays.push(wait);
-        if (wait >= staleness.overdueDays) s.overdue++;
-      }
       byReviewer.set(login, s);
     }
   }
@@ -1152,19 +1135,20 @@ function renderCurrentState(
 
   const maxTotal = Math.max(1, ...reviewers.map((r) => r.total));
 
-  // Stacked horizontal bar chart (same style as reviews-per-person)
-  const W = 760;
+  // Stacked horizontal bar chart — count before bars
+  const W = 640;
   const labelW = 150;
-  const countW = 200;
+  const countW = 60;
   const rowH = 28;
   const barH = 18;
-  const barMax = W - labelW - countW;
+  const barsX = labelW + countW;
+  const barMax = W - barsX;
   const height = reviewers.length * rowH;
 
   const body = reviewers
     .map((r, i) => {
       const y = i * rowH + (rowH - barH) / 2;
-      let x = labelW;
+      let x = barsX;
       const segs = BANDS.map((band) => {
         const n = r[band];
         if (n <= 0) return "";
@@ -1178,24 +1162,9 @@ function renderCurrentState(
         return rect + num;
       }).join("");
 
-      const avgWait =
-        r.waitDays.length > 0
-          ? (r.waitDays.reduce((s, a) => s + a, 0) / r.waitDays.length).toFixed(1)
-          : "—";
-      const avgWaitColor =
-        r.waitDays.length > 0
-          ? ageColor(
-              r.waitDays.reduce((s, a) => s + a, 0) / r.waitDays.length,
-              staleness,
-            )
-          : "var(--muted)";
-
       const label = `<text x="${labelW - 10}" y="${y + barH / 2}" class="svg-label svg-link" data-filter-login="${escapeHtml(r.login)}" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(r.login, dir))}<title>${escapeHtml(personTitle(r.login, dir))}</title></text>`;
-      const barEnd = labelW + (r.total / maxTotal) * barMax;
-      const count = `<text x="${barEnd + 6}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central">${r.total} open</text>`;
-      const waitX = barEnd + 70;
-      const wait = `<text x="${waitX}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central" fill="${avgWaitColor}">avg ${avgWait}d${r.overdue > 0 ? ` · ${r.overdue} overdue` : ""}</text>`;
-      return label + segs + count + wait;
+      const count = `<text x="${labelW + 6}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central">${r.total}</text>`;
+      return label + count + segs;
     })
     .join("");
 
@@ -1207,12 +1176,11 @@ function renderCurrentState(
   );
 
   const totalOpen = openPrs.length;
-  const totalOverdue = [...byReviewer.values()].reduce((s, r) => s + r.overdue, 0);
   const unassigned = openPrs.filter((pr) => pr.assignees.length === 0).length;
 
   return `<section>
       <h2>Current assignments</h2>
-      <p class="section-hint">${totalOpen} open PRs right now${totalOverdue > 0 ? `, <strong style="color:var(--band-hard)">${totalOverdue} overdue</strong> (≥${staleness.overdueDays}d since assignment)` : ""}${unassigned > 0 ? `, ${unassigned} unassigned` : ""}. Wait time = days since Siara assigned the reviewer, not PR age. Click a name to see their PRs.</p>
+      <p class="section-hint">${totalOpen} open PRs right now${unassigned > 0 ? `, ${unassigned} unassigned` : ""}. Click a reviewer name to see their PRs.</p>
       ${renderLegend()}
       ${chart}
     </section>`;

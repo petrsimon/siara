@@ -247,13 +247,18 @@ function renderReport(
   const groupH = strategies.length * rowH + 12;
   const labelW = 140;
   const svgH = allLogins.length * groupH + 20;
-  const stratColors = [
-    "#3b6df6", // siara — blue
-    "#e6833a", // whodo — orange
-    "#4f9d69", // sofia — green
-    "#9b59b6", // whoreview — purple
-    "#d1495b", // meta — red
-  ];
+  const stratColors: Record<string, string> = {
+    siara: "#3b6df6",
+    "siara-floor": "#e6833a",
+    "siara-blend": "#4f9d69",
+    "siara-load": "#9b59b6",
+    "siara-v2": "#d1495b",
+    "siara-noedu": "#16a085",
+    whodo: "#f39c12",
+    sofia: "#8e44ad",
+    whoreview: "#e74c3c",
+    meta: "#34495e",
+  };
 
   const loadBars = allLogins
     .map((login, gi) => {
@@ -264,7 +269,7 @@ function renderReport(
           const v = metrics[si]!.loadByPerson[login] ?? 0;
           const w = (v / maxLoad) * barW;
           const y = gy + si * rowH;
-          const color = stratColors[si] ?? "#888";
+          const color = stratColors[s] ?? "#888";
           return (
             `<rect x="${labelW}" y="${y}" width="${w.toFixed(1)}" height="${rowH - 4}" rx="3" fill="${color}" fill-opacity="0.75"><title>${esc(s)}: ${v}</title></rect>` +
             (v > 0
@@ -279,8 +284,8 @@ function renderReport(
 
   const legendItems = strategies
     .map(
-      (s, i) =>
-        `<li><span class="swatch" style="background:${stratColors[i]}"></span>${esc(s)}</li>`,
+      (s) =>
+        `<li><span class="swatch" style="background:${stratColors[s] ?? "#888"}"></span>${esc(s)}</li>`,
     )
     .join("");
 
