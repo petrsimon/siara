@@ -666,3 +666,226 @@ describe("manual override tracking", () => {
     expect(await store.readOverrides()).toEqual([]);
   });
 });
+
+describe("reviewer decline reassignment", () => {
+  let store: SqliteStore;
+  let assignmentsPath: string;
+
+  beforeEach(async () => {
+    assignmentsPath = nextAssignmentsPath("decline");
+    store = openStore({ dbPath: ":memory:", assignmentsPath });
+    await store.init();
+  });
+
+  afterEach(async () => {
+    await store.close();
+    for (const p of [
+      assignmentsPath,
+      snapshotPathFor(assignmentsPath),
+      responsePathFor(assignmentsPath),
+    ]) {
+      if (existsSync(p)) unlinkSync(p);
+    }
+  });
+
+  function teamWithLead() {
+    return {
+      ...DEFAULT_TEAM_CONFIG,
+      roster: ["alice", "bob", "carol", "lead"],
+      managers: ["lead"],
+    };
+  }
+
+  it("re-picks after a declined Siara assignment, excluding the decliner", async () => {
+    await store.appendAssignment({
+      date: NOW.slice(0, 10),
+      repo: REPO,
+      pr: 70,
+      assignees: ["bob"],
+      difficulty: 0.2,
+      band: "simple",
+      rationale: "first pick",
+      candidates: [],
+    });
+    await store.upsertMaintainers({
+      repo: REPO,
+      fetchedAt: NOW,
+      codeownersRules: [],
+      collaborators: ["alice", "bob", "carol"],
+    });
+
+    const pr = pullRequest({
+      number: 70,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: [],
+    });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pr] },
+      commitHistory: {
+        [REPO]: {
+          "src/auth/login.ts": { alice: 10, bob: 10, carol: 1 },
+          "src/auth/session.ts": { alice: 8, bob: 8 },
+        },
+      },
+      reviewRequestEvents: {
+        [REPO]: [
+          { pr: 70, login: "bob", at: "2026-08-24T10:00:00.000Z", kind: "requested" },
+          { pr: 70, login: "bob", at: "2026-08-25T09:00:00.000Z", kind: "removed" },
+        ],
+      },
+    });
+    const deps: SiaraDeps = {
+      store,
+      github,
+      jira: new MockJiraAdapter(),
+      teamConfig: teamWithLead(),
+      repoConfigs: [{ repo: REPO }],
+      repos: [REPO],
+    };
+
+    const result = await daily(deps, NOW, { noSync: true });
+    const entry = result.assigned.find((a) => a.pr === 70);
+
+    expect(entry?.assignees).toBeDefined();
+    expect(entry?.assignees).not.toContain("bob");
+    expect(entry?.assignees.length).toBeGreaterThan(0);
+    expect(await store.getDeclines(REPO, 70)).toContain("bob");
+    expect(github.reviewRequests).toEqual([
+      { repo: REPO, prNumber: 70, logins: entry?.assignees },
+    ]);
+  });
+
+  it("does not treat removed-then-re-requested as a decline", async () => {
+    await store.appendAssignment({
+      date: NOW.slice(0, 10),
+      repo: REPO,
+      pr: 71,
+      assignees: ["bob"],
+      difficulty: 0.2,
+      band: "simple",
+      rationale: "first pick",
+      candidates: [],
+    });
+
+    const pr = pullRequest({
+      number: 71,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: ["bob"],
+    });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pr] },
+      reviewRequestEvents: {
+        [REPO]: [
+          { pr: 71, login: "bob", at: "2026-08-24T10:00:00.000Z", kind: "requested" },
+          { pr: 71, login: "bob", at: "2026-08-25T09:00:00.000Z", kind: "removed" },
+          { pr: 71, login: "bob", at: "2026-08-25T10:00:00.000Z", kind: "requested" },
+        ],
+      },
+    });
+
+    await daily(makeDeps(github, store), NOW, { noSync: true });
+
+    expect(await store.getDeclines(REPO, 71)).toEqual([]);
+    expect(github.reviewRequests).toEqual([]);
+  });
+
+  it("routes to the team lead when every eligible candidate declined", async () => {
+    await store.appendAssignment({
+      date: NOW.slice(0, 10),
+      repo: REPO,
+      pr: 72,
+      assignees: ["alice"],
+      difficulty: 0.2,
+      band: "simple",
+      rationale: "first pick",
+      candidates: [],
+    });
+    await store.recordDecline({
+      repo: REPO,
+      pr: 72,
+      login: "alice",
+      at: "2026-08-25T09:00:00.000Z",
+    });
+    await store.recordDecline({
+      repo: REPO,
+      pr: 72,
+      login: "bob",
+      at: "2026-08-25T09:00:00.000Z",
+    });
+    await store.recordDecline({
+      repo: REPO,
+      pr: 72,
+      login: "carol",
+      at: "2026-08-25T09:00:00.000Z",
+    });
+
+    const pr = pullRequest({
+      number: 72,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: [],
+    });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pr] },
+      reviewRequestEvents: {
+        [REPO]: [
+          { pr: 72, login: "alice", at: "2026-08-25T09:00:00.000Z", kind: "removed" },
+        ],
+      },
+    });
+    const deps: SiaraDeps = {
+      store,
+      github,
+      jira: new MockJiraAdapter(),
+      teamConfig: {
+        ...DEFAULT_TEAM_CONFIG,
+        roster: ["alice", "bob", "carol"],
+        managers: ["lead"],
+      },
+      repoConfigs: [{ repo: REPO }],
+      repos: [REPO],
+    };
+
+    const result = await daily(deps, NOW, { noSync: true });
+    const entry = result.assigned.find((a) => a.pr === 72);
+
+    expect(entry?.assignees).toEqual(["lead"]);
+    expect(entry?.rationale).toContain("routed to team lead @lead");
+  });
+
+  it("leaves a PR with requested reviewers pending (no reassignment)", async () => {
+    await store.appendAssignment({
+      date: NOW.slice(0, 10),
+      repo: REPO,
+      pr: 73,
+      assignees: ["bob"],
+      difficulty: 0.2,
+      band: "simple",
+      rationale: "first pick",
+      candidates: [],
+    });
+
+    const pr = pullRequest({
+      number: 73,
+      author: "author",
+      files: simpleFiles(),
+      requestedReviewers: ["alice"],
+    });
+    const github = new MockGitHubAdapter({
+      openPullRequests: { [REPO]: [pr] },
+      reviewRequestEvents: {
+        [REPO]: [
+          { pr: 73, login: "bob", at: "2026-08-25T09:00:00.000Z", kind: "removed" },
+        ],
+      },
+    });
+
+    await daily(makeDeps(github, store), NOW, { noSync: true });
+
+    expect(github.reviewRequests).toEqual([]);
+    const assignments = await store.readAssignments();
+    expect(assignments.filter((a) => a.pr === 73)).toHaveLength(1);
+  });
+});

@@ -58,6 +58,9 @@ export function formatRationale(input: RationaleInput): string {
   if (atRiskCount > 0) {
     lines.push(`  Files-at-risk: ${atRiskCount} bus-factor-1 file(s) — spread boost applied to non-owners`);
   }
+  for (const note of result.notes) {
+    lines.push(`  ${note}`);
+  }
   lines.push("  Ranked candidates:");
   for (const c of ranked) {
     lines.push(candidateLine(c, finalScoreByLogin[c.login] ?? 0));

@@ -275,6 +275,61 @@ describe("pickReviewers", () => {
     });
   });
 
+  describe("owner gate", () => {
+    it("narrows candidates to eligible owners", () => {
+      const result = pickReviewers(
+        pickInput({
+          config: { roster: ["alice", "bob", "carol"] },
+          candidates: [candidate("alice"), candidate("bob"), candidate("carol")],
+          eligibleOwners: ["bob"],
+        }),
+      );
+
+      expect(result.ownerGateApplied).toBe(true);
+      expect(result.ranked.map((c) => c.login)).toEqual(["bob"]);
+      expect(result.assignees).toEqual(["bob"]);
+      expect(result.notes.some((n) => n.includes("owner gate"))).toBe(true);
+    });
+
+    it("falls back to full roster when eligibleOwners is empty", () => {
+      const result = pickReviewers(
+        pickInput({
+          candidates: [candidate("alice"), candidate("bob")],
+          eligibleOwners: [],
+        }),
+      );
+
+      expect(result.ownerGateApplied).toBe(false);
+      expect(result.ranked.map((c) => c.login).sort()).toEqual(["alice", "bob"]);
+    });
+
+    it("falls back when owner set excludes every eligible candidate", () => {
+      const result = pickReviewers(
+        pickInput({
+          candidates: [candidate("alice"), candidate("bob")],
+          eligibleOwners: ["nobody-on-roster"],
+        }),
+      );
+
+      expect(result.ownerGateApplied).toBe(false);
+      expect(result.ranked.map((c) => c.login).sort()).toEqual(["alice", "bob"]);
+    });
+  });
+
+  describe("declined reviewers", () => {
+    it("excludes declined logins from the pool", () => {
+      const result = pickReviewers(
+        pickInput({
+          candidates: [candidate("alice"), candidate("bob"), candidate("carol")],
+          declined: ["bob"],
+        }),
+      );
+
+      expect(result.ranked.map((c) => c.login).sort()).toEqual(["alice", "carol"]);
+      expect(result.assignees).not.toContain("bob");
+    });
+  });
+
   describe("empty eligible pool", () => {
     it("returns no assignees when nobody is eligible", () => {
       const result = pickReviewers(

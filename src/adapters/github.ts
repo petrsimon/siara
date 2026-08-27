@@ -27,6 +27,7 @@ const REVIEW_HISTORY_PAGE_CAP = 50;
 const REVIEW_HISTORY_PAGE_SIZE = 100;
 /** PRs per GraphQL timeline query — keeps the document under GitHub's cost cap. */
 const REVIEW_REQUEST_BATCH = 20;
+const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
 
 export interface GhCliOptions {
   /** When true, log write commands instead of executing them. */
@@ -661,5 +662,61 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
     }
 
     await runGh(args);
+  }
+
+  async getCodeownersText(repo: string): Promise<string | undefined> {
+    for (const path of CODEOWNERS_PATHS) {
+      try {
+        const stdout = await runGh([
+          "api",
+          `repos/${repo}/contents/${path}`,
+          "--jq",
+          ".content",
+        ]);
+        if (!stdout || stdout === "null") {
+          continue;
+        }
+        return Buffer.from(stdout, "base64").toString("utf8");
+      } catch {
+        // Missing or unreadable path — try the next candidate.
+      }
+    }
+    return undefined;
+  }
+
+  async getTeamMembers(org: string, teamSlug: string): Promise<string[]> {
+    try {
+      const stdout = await runGh([
+        "api",
+        `orgs/${org}/teams/${teamSlug}/members`,
+        "--paginate",
+        "--jq",
+        ".[].login",
+      ]);
+      return stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && line !== "null");
+    } catch {
+      return [];
+    }
+  }
+
+  async getMaintainCollaborators(repo: string): Promise<string[]> {
+    try {
+      const stdout = await runGh([
+        "api",
+        `repos/${repo}/collaborators?per_page=100`,
+        "--paginate",
+        "--jq",
+        ".[] | select(.permissions.maintain == true or .permissions.admin == true) | .login",
+      ]);
+      return stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && line !== "null");
+    } catch {
+      return [];
+    }
   }
 }

@@ -65,6 +65,12 @@ export interface GitHubAdapter {
     prNumber: number,
     logins: string[],
   ): Promise<void>;
+  /** Raw CODEOWNERS file text for a repo (tries .github/CODEOWNERS, CODEOWNERS, docs/CODEOWNERS). undefined if none. */
+  getCodeownersText(repo: string): Promise<string | undefined>;
+  /** Members (logins) of an org team; [] if unreadable. */
+  getTeamMembers(org: string, teamSlug: string): Promise<string[]>;
+  /** Collaborators with maintain/admin permission (logins); [] if the collaborators API is not readable (e.g. 403). */
+  getMaintainCollaborators(repo: string): Promise<string[]>;
 }
 
 export interface JiraAdapter {
