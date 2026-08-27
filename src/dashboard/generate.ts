@@ -981,27 +981,47 @@ function renderAlgorithmSection(
     ["Penalty", "load (decoupled)"],
     ["Top-K", "pick from top 5"],
   ];
+  // Two-row serpentine layout keeps labels readable on normal laptop/mobile
+  // widths. Row two runs right-to-left so the arrows preserve pipeline order.
   const W = 640;
-  const boxH = 46;
-  const boxW = 70;
-  const gap = (W - stages.length * boxW) / (stages.length - 1);
-  const y = 8;
-  let px = 0;
-  const boxes: string[] = [];
+  const boxH = 58;
+  const boxW = 132;
+  const columns = 4;
+  const columnGap = (W - columns * boxW) / (columns - 1);
+  const rowGap = 28;
+  const positions = stages.map((_, i) => {
+    const row = Math.floor(i / columns);
+    const positionInRow = i % columns;
+    const column = row % 2 === 0 ? positionInRow : columns - 1 - positionInRow;
+    return {
+      x: column * (boxW + columnGap),
+      y: 8 + row * (boxH + rowGap),
+    };
+  });
+  const boxes = stages
+    .map(([title, sub], i) => {
+      const position = positions[i]!;
+      return stageBox(position.x, position.y, boxW, boxH, title, sub);
+    })
+    .join("");
   const arrows: string[] = [];
-  stages.forEach(([t, s], i) => {
-    boxes.push(stageBox(px, y, boxW, boxH, t, s));
-    if (i < stages.length - 1) {
-      const ax = px + boxW;
-      const ay = y + boxH / 2;
+  for (let i = 0; i < positions.length - 1; i += 1) {
+    const from = positions[i]!;
+    const to = positions[i + 1]!;
+    const sameRow = from.y === to.y;
+    if (sameRow) {
+      const forward = to.x > from.x;
       arrows.push(
-        `<line x1="${fmt(ax + 2)}" y1="${ay}" x2="${fmt(ax + gap - 2)}" y2="${ay}" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arw)"/>`,
+        `<line x1="${fmt((forward ? from.x + boxW : from.x) + (forward ? 2 : -2))}" y1="${fmt(from.y + boxH / 2)}" x2="${fmt((forward ? to.x : to.x + boxW) + (forward ? -2 : 2))}" y2="${fmt(to.y + boxH / 2)}" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arw)"/>`,
+      );
+    } else {
+      arrows.push(
+        `<line x1="${fmt(from.x + boxW / 2)}" y1="${fmt(from.y + boxH + 2)}" x2="${fmt(to.x + boxW / 2)}" y2="${fmt(to.y - 2)}" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arw)"/>`,
       );
     }
-    px += boxW + gap;
-  });
+  }
   const defs = `<defs><marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>`;
-  const diagram = svg(W, boxH + 16, defs + arrows.join("") + boxes.join(""), "Scoring pipeline");
+  const diagram = svg(W, 2 * boxH + rowGap + 16, defs + arrows.join("") + boxes, "Scoring pipeline");
 
   const routing = `
     <table>

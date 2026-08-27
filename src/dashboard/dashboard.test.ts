@@ -465,6 +465,8 @@ describe("generateDashboard", () => {
     expect(html).toContain("0.3");
     // The pipeline diagram (arrow marker) and the WIP cap explained with live values.
     expect(html).toContain('id="arw"');
+    expect(html).toContain('viewBox="0 0 640 160"');
+    expect(html).toContain('width="132" height="58"');
     expect(html).toContain("WhoDo");
     // Live knobs echoed (load weight + WIP limit), not hard-coded prose.
     expect(html).toContain("<code>0.12</code>");
