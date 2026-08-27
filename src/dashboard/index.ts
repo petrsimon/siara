@@ -65,13 +65,11 @@ export interface DashboardInput {
       bandFloor: DifficultyBand;
     };
   };
-  /** Strategy comparison data — computed by `siara compare`, optional. */
-  strategyComparison?: StrategyComparison;
   /** ISO timestamp for the "generated at" footer — injected for determinism. */
   generatedAtIso: string;
 }
 
-/** Pre-computed strategy comparison data (written by `siara compare`). */
+/** Pre-computed strategy comparison data for the standalone compare report. */
 export interface StrategyComparison {
   generatedAt: string;
   totalPrs: number;

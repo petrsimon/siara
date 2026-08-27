@@ -10,14 +10,14 @@ import { SlackHttpAdapter } from "./adapters/slack.js";
 import type { SlackAdapter } from "./adapters/index.js";
 import type { SiaraTeamConfig } from "./config.js";
 import { loadConfig } from "./config-loader.js";
-import { generateDashboard, type StrategyComparison } from "./dashboard/index.js";
+import { generateDashboard } from "./dashboard/index.js";
 import { ALL_STRATEGIES, type StrategyName } from "./scoring/pickReviewers.js";
 import { daily, dryRun, sync } from "./runtime/index.js";
 import { readAssignmentsFile } from "./store/assignmentsLog.js";
 import { overridesPathFor, readOverridesFile } from "./store/overridesLog.js";
 import { readOpenPrsSnapshot, snapshotPathFor } from "./store/snapshotLog.js";
 import { readResponseReport, responsePathFor, writeResponseReport } from "./store/responseLog.js";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 const ASSIGNMENTS_PATH = "./data/assignments.jsonl";
@@ -191,16 +191,6 @@ async function main(): Promise<void> {
       }
     }
 
-    const STRAT_JSON = "./data/strategy-comparison.json";
-    let strategyComparison: StrategyComparison | undefined;
-    if (existsSync(STRAT_JSON)) {
-      try {
-        strategyComparison = JSON.parse(readFileSync(STRAT_JSON, "utf8")) as StrategyComparison;
-      } catch {
-        console.warn("Could not parse strategy-comparison.json — skipping Strategies tab.");
-      }
-    }
-
     const html = generateDashboard({
       assignments,
       overrides,
@@ -210,7 +200,6 @@ async function main(): Promise<void> {
       staleness,
       windowDays,
       algorithm,
-      strategyComparison,
       generatedAtIso: nowIso,
     });
     mkdirSync(dirname(outPath), { recursive: true });

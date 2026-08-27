@@ -57,9 +57,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const overridesSection = renderOverridesSection(input, overrides);
   const algorithmSection = renderAlgorithmSection(
     input.algorithm,
-    input.strategyComparison,
   );
-  const strategySection = renderStrategySection(input.strategyComparison, dir);
   const ageDistSection = renderAgeDistribution(openPrs);
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
   const assignmentsSection = renderAssignmentsSection(openPrs, historyMetrics, dir);
@@ -104,7 +102,6 @@ ${STYLES}
     <nav class="tabs" role="tablist">
       <button class="tab active" type="button" data-tab="overview">Dashboard</button>
       <button class="tab" type="button" data-tab="open-prs">Open PRs</button>
-      <button class="tab" type="button" data-tab="strategies">Strategies</button>
       <button class="tab" type="button" data-tab="how">How it works</button>
       <button class="tab" type="button" data-tab="merge-matrix">Merge times</button>
     </nav>
@@ -164,10 +161,6 @@ ${STYLES}
 
     <div class="tab-panel hidden" id="tab-open-prs">
     ${openPrsSection}
-    </div>
-
-    <div class="tab-panel hidden" id="tab-strategies">
-    ${strategySection}
     </div>
 
     <div class="tab-panel hidden" id="tab-how">
@@ -907,44 +900,6 @@ function stageBox(
   );
 }
 
-/** Live benchmark rows for the How-it-works tab (from `siara compare`). */
-function renderBenchmarkBlock(data: StrategyComparison | undefined): string {
-  if (!data || data.metrics.length === 0) {
-    return `<p class="algo-p">Run <code>siara compare</code> to populate live open-PR benchmark numbers — the <em>Strategies</em> tab shows the full side-by-side view.</p>`;
-  }
-
-  const strategies = data.strategies as StrategyName[];
-  const baseline = strategyBaseline(strategies);
-  const baselineLabel = STRAT_LABELS[baseline] ?? baseline;
-  const ordered = [
-    baseline,
-    ...strategies.filter((s) => s !== baseline),
-  ];
-  const byStrategy = new Map(data.metrics.map((m) => [m.strategy, m]));
-
-  const rows = ordered
-    .map((s) => {
-      const m = byStrategy.get(s);
-      if (!m) return "";
-      const isMain = s === baseline;
-      return `<tr${isMain ? ' class="strat-row-main"' : ""}>
-        <td class="login">${escapeHtml(STRAT_LABELS[s] ?? s)}${isMain ? " <span class=\"count\">(live)</span>" : ""}</td>
-        <td class="count">${m.gini.toFixed(3)}</td>
-        <td class="count">${m.activeReviewers}</td>
-        <td class="count">${m.maxLoad}</td>
-        <td class="count">${isMain ? "—" : `${m.agreementPct}%`}</td>
-      </tr>`;
-    })
-    .join("");
-
-  const genAt = data.generatedAt?.slice(0, 10) ?? "";
-  return `<p class="algo-p">Side-by-side on <strong>${data.totalPrs} open PRs</strong>${genAt ? ` (${escapeHtml(genAt)})` : ""}. <strong>${escapeHtml(baselineLabel)}</strong> is the live strategy — lower Gini = more even spread. Match = agreement with ${escapeHtml(baselineLabel)}.</p>
-      <table>
-        <thead><tr><th>Strategy</th><th>Gini</th><th>Reviewers</th><th>Max load</th><th>Match</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
-}
-
 /**
  * "How it works" — the scoring pipeline as a left→right diagram plus a prose
  * explanation of the fairness policy, with the LIVE knob values so the doc can't
@@ -952,7 +907,6 @@ function renderBenchmarkBlock(data: StrategyComparison | undefined): string {
  */
 function renderAlgorithmSection(
   algo: DashboardInput["algorithm"],
-  strategyComparison?: StrategyComparison,
 ): string {
   const a = algo ?? DEFAULT_ALGO;
   const av = a.availability;
@@ -969,7 +923,7 @@ function renderAlgorithmSection(
     bandFloor: DEFAULT_TEAM_CONFIG.pathRisk.bandFloor,
   };
   const riskLabels = pathRisk.labels.length > 0 ? pathRisk.labels.join(", ") : "configured high-risk paths";
-  const liveLabel = STRAT_LABELS[MAIN_STRATEGY] ?? MAIN_STRATEGY;
+  const liveLabel = "siara";
 
   const stages: Array<[string, string]> = [
     ["PR", "diff + paths"],
@@ -1033,8 +987,6 @@ function renderAlgorithmSection(
       </tbody>
     </table>`;
 
-  const benchmark = renderBenchmarkBlock(strategyComparison);
-
   return `<section>
       <h2>How it works</h2>
       <p class="section-hint">Deterministic, no LLM: identical inputs always produce identical assignments (ties broken by a seeded dice). The live strategy is <strong>${escapeHtml(liveLabel)}</strong> — score floor, decoupled load penalty, and top-5 spread (the CLI runs it as <code>siara</code>). Knobs below reflect the team-level config loaded when this dashboard was generated; repo-specific overrides may differ.</p>
@@ -1061,39 +1013,6 @@ function renderAlgorithmSection(
       <h3 class="algo-h3">7 · Fairness: spread low-risk, cap high-risk</h3>
       <p class="algo-p">Simple PRs (the bulk) are spread by load — that's why <code>bandWeight.simple</code> is high. Hard PRs still go to experts, but a <strong>WIP cap</strong> stops one expert being bombarded: past <code>${av.hardWipLimit}</code> concurrent hard reviews, each extra adds <code>${av.hardWipPenalty}</code> penalty so the ${av.hardWipLimit + 1}th+ overflows to the next expert. Model: expertise + workload balancing (<em>WhoDo</em>, FSE'19) with knowledge distribution (<em>Sofia</em>, ICSE'20).</p>
       <p class="algo-p">Candidates are ranked by final score → open load → seeded dice; the top ${a.reviewersPerPr} reviewer(s) are drawn from the top-5 pool. See <em>Review assignments</em> (History tab) and <em>Assignment flow</em> for the outcome; <em>Gini (workload)</em> quantifies how even it is.</p>
-      <h3 class="algo-h3">8 · Comparison with other strategies</h3>
-      <p class="algo-p">The live scorer is benchmarked against published algorithms and earlier Siara variants (score-floor A/B, blend routing, load-only penalty, legacy top-1 <code>siara</code>, etc.). Design differences:</p>
-      <table>
-        <thead><tr><th>Strategy</th><th>Core idea</th><th>What ${escapeHtml(liveLabel)} adds</th></tr></thead>
-        <tbody>
-          <tr>
-            <td class="login">WhoDo</td>
-            <td>expertise / (1 + α·load) (Asthana et&nbsp;al., FSE'19)</td>
-            <td>Difficulty routing + score floor — newcomers get safe PRs, experts aren't the only scoreable candidates on simple work</td>
-          </tr>
-          <tr>
-            <td class="login">Sofia</td>
-            <td>expertise + files-at-risk + Gini-aware load (Mirsaeedi &amp; Rigby, ICSE'20)</td>
-            <td>Band routing and decoupled penalty — FaR spread without experts dominating every simple PR</td>
-          </tr>
-          <tr>
-            <td class="login">WhoReview</td>
-            <td>expertise + collaboration affinity + load (Ouni et&nbsp;al., 2021)</td>
-            <td>Load pressure on all bands — continuity helps but doesn't lock a tight author↔reviewer circle</td>
-          </tr>
-          <tr>
-            <td class="login">Meta RevRecV2</td>
-            <td>scoring + random-from-top-K anti-bystander (Meta, FSE'24)</td>
-            <td>Band routing, score floor, and top-5 pool (Meta uses top-3)</td>
-          </tr>
-          <tr>
-            <td class="login">siara (legacy)</td>
-            <td>original top-1 band routing without floor or decoupled penalty</td>
-            <td>${escapeHtml(liveLabel)} adds the floor, decoupled penalty, and top-5 spread — see Strategies tab for divergence</td>
-          </tr>
-        </tbody>
-      </table>
-      ${benchmark}
     </section>`;
 }
 
@@ -1484,29 +1403,6 @@ const STYLES = `
     .pr-org { display: block; font-size: 0.72rem; color: var(--muted); }
     .count { width: 5rem; font-variant-numeric: tabular-nums; color: var(--muted); }
 
-    /* Strategy comparison tab */
-    .strat-grid { display: flex; gap: 1rem; flex-wrap: wrap; }
-    .strat-card {
-      flex: 1 1 180px; min-width: 180px;
-      border: 1px solid var(--border); border-radius: 10px;
-      padding: 0.9rem 1rem;
-    }
-    .strat-card-main {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
-    }
-    .strat-name {
-      font-size: 0.9rem; font-weight: 650; margin-bottom: 0.5rem;
-      text-transform: uppercase; letter-spacing: 0.04em;
-    }
-    .strat-kpis { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; }
-    .strat-kpi { display: flex; flex-direction: column; }
-    .strat-kpi .kpi-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--muted); letter-spacing: 0.04em; }
-    .strat-kpi .kpi-value { font-size: 1.1rem; font-weight: 680; font-variant-numeric: tabular-nums; }
-    td.strat-same { background: #e8f5e9; }
-    td.strat-diff { background: #fce4ec; }
-    .strat-same-dot { color: #2e7d32; font-weight: 600; }
-    .strat-diff-dot { color: #c62828; font-weight: 600; }
     .svg-count { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 
     footer { margin-top: 2rem; font-size: 0.82rem; color: var(--muted); text-align: center; }

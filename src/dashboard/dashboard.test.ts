@@ -455,7 +455,9 @@ describe("generateDashboard", () => {
     expect(html).toContain('data-tab="how"');
     expect(html).toContain('id="tab-how"');
     expect(html).toContain("How it works");
-    expect(html).toContain("siara-v2");
+    expect(html).toContain("<strong>siara</strong>");
+    expect(html).not.toContain('data-tab="strategies"');
+    expect(html).not.toContain("<h2>Strategy comparison</h2>");
     expect(html).toContain("Review assignments");
     expect(html).toContain("Continuity boosts");
     expect(html).toContain("Eligibility and decline handling");
@@ -467,55 +469,9 @@ describe("generateDashboard", () => {
     expect(html).toContain('id="arw"');
     expect(html).toContain('viewBox="0 0 640 160"');
     expect(html).toContain('width="132" height="58"');
-    expect(html).toContain("WhoDo");
     // Live knobs echoed (load weight + WIP limit), not hard-coded prose.
     expect(html).toContain("<code>0.12</code>");
     expect(html).toContain("<code>3</code>");
-  });
-
-  it("embeds live strategy-comparison metrics in How it works", () => {
-    const html = generateDashboard({
-      assignments: [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],
-      strategyComparison: {
-        generatedAt: "2026-08-26T12:00:00.000Z",
-        totalPrs: 10,
-        strategies: ["siara-v2", "whodo", "sofia"] as never,
-        metrics: [
-          {
-            strategy: "siara-v2" as never,
-            gini: 0.358,
-            activeReviewers: 9,
-            maxLoad: 30,
-            minLoad: 1,
-            loadByPerson: {},
-            agreementPct: 100,
-          },
-          {
-            strategy: "whodo" as never,
-            gini: 0.5,
-            activeReviewers: 8,
-            maxLoad: 44,
-            minLoad: 2,
-            loadByPerson: {},
-            agreementPct: 42,
-          },
-          {
-            strategy: "sofia" as never,
-            gini: 0.49,
-            activeReviewers: 8,
-            maxLoad: 47,
-            minLoad: 2,
-            loadByPerson: {},
-            agreementPct: 38,
-          },
-        ],
-        prs: [],
-      },
-      generatedAtIso,
-    });
-    expect(html).toContain("0.358");
-    expect(html).toContain("10 open PRs");
-    expect(html).not.toContain("Gini of ~0.36");
   });
 
   it("renders the open-PRs age overview and per-reviewer waiting stats", () => {
