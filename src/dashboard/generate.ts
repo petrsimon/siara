@@ -106,6 +106,7 @@ ${STYLES}
       <button class="tab" type="button" data-tab="open-prs">Open PRs</button>
       <button class="tab" type="button" data-tab="strategies">Strategies</button>
       <button class="tab" type="button" data-tab="how">How it works</button>
+      <button class="tab" type="button" data-tab="merge-matrix">Merge times</button>
     </nav>
 
     <div class="tab-panel" id="tab-overview">
@@ -158,8 +159,6 @@ ${STYLES}
 
     ${waitingSection}
 
-    ${authorReviewerMatrix}
-
     ${overridesSection}
     </div>
 
@@ -173,6 +172,10 @@ ${STYLES}
 
     <div class="tab-panel hidden" id="tab-how">
     ${algorithmSection}
+    </div>
+
+    <div class="tab-panel hidden" id="tab-merge-matrix">
+    ${authorReviewerMatrix}
     </div>
 
     <footer>Generated at ${generatedAt}</footer>
