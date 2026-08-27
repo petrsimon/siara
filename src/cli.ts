@@ -90,6 +90,12 @@ function makeSlack(teamConfig: SiaraTeamConfig): SlackAdapter | undefined {
   return undefined;
 }
 
+function formatDuration(durationMs: number): string {
+  return durationMs < 1000
+    ? `${durationMs}ms`
+    : `${(durationMs / 1000).toFixed(2)}s`;
+}
+
 function parseDashboardOut(argv: string[]): string {
   const outIdx = argv.indexOf("--out");
   if (outIdx !== -1 && argv[outIdx + 1]) {
@@ -268,7 +274,9 @@ async function main(): Promise<void> {
           console.log(`Synced ${results.length} repo(s):`);
           for (const r of results) {
             const mode = r.coldStart ? "cold start" : "incremental";
-            console.log(`  ${r.repo} (${mode}) @ ${r.syncedAtIso}`);
+            console.log(
+              `  ${r.repo} (${mode}) @ ${r.syncedAtIso} — ${formatDuration(r.durationMs)}`,
+            );
             for (const g of r.giantPrs) {
               console.warn(
                 `    ⚠ giant PR #${g.pr} by ${g.author} — ${g.fileCount} files (heavy commit-history cost; consider splitting)`,
@@ -288,7 +296,7 @@ async function main(): Promise<void> {
         }
         for (const s of result.synced) {
           const mode = s.coldStart ? "cold start" : "incremental";
-          console.log(`Synced ${s.repo} (${mode})`);
+          console.log(`Synced ${s.repo} (${mode}) — ${formatDuration(s.durationMs)}`);
           for (const g of s.giantPrs) {
             console.warn(
               `  ⚠ giant PR #${g.pr} by ${g.author} — ${g.fileCount} files`,

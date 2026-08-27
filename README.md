@@ -122,7 +122,10 @@ Environment: `SIARA_CONFIG` (default `./siara.config.json`), `SIARA_DB`
 
 `sync` is the slow step. Pass `--no-sync` to `dry-run`/`daily` to score from the
 last-synced signals (open PRs are still listed fresh) — turns a multi-minute
-round trip into ~2s while iterating on scoring or config.
+round trip into ~2s while iterating on scoring or config. `sync` and `daily`
+report each repository's elapsed sync duration, so slow repositories can be
+compared directly; the duration covers that repository's store/API work, while
+global reviewer-load and busyness fetches happen once before the repository loop.
 
 ### Faster commit history from local clones
 

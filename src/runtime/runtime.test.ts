@@ -86,9 +86,14 @@ describe("sync", () => {
 
     const results = await sync(deps, NOW);
 
-    expect(results).toEqual([
-      { repo: REPO, coldStart: true, syncedAtIso: NOW, giantPrs: [] },
-    ]);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      repo: REPO,
+      coldStart: true,
+      syncedAtIso: NOW,
+      giantPrs: [],
+    });
+    expect(results[0]?.durationMs).toBeGreaterThanOrEqual(0);
     expect(await store.getLastSyncAt(REPO)).toBe(NOW);
 
     const [alice] = await store.getCandidateHistory(REPO, pr, ["alice"]);
@@ -111,9 +116,14 @@ describe("sync", () => {
     await sync(deps, NOW);
     const second = await sync(deps, LATER);
 
-    expect(second).toEqual([
-      { repo: REPO, coldStart: false, syncedAtIso: LATER, giantPrs: [] },
-    ]);
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({
+      repo: REPO,
+      coldStart: false,
+      syncedAtIso: LATER,
+      giantPrs: [],
+    });
+    expect(second[0]?.durationMs).toBeGreaterThanOrEqual(0);
     expect(await store.getLastSyncAt(REPO)).toBe(LATER);
   });
 

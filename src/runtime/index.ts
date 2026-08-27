@@ -35,6 +35,8 @@ export interface SyncResult {
   /** True = full cold-start sync; false = incremental. */
   coldStart: boolean;
   syncedAtIso: string;
+  /** Wall-clock sync duration for this repository, in milliseconds. */
+  durationMs: number;
   /** Open PRs exceeding teamConfig.giantPrFileThreshold (reported, not capped). */
   giantPrs: GiantPr[];
 }

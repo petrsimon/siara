@@ -2,6 +2,7 @@
  * Sync: fetch GitHub/Jira signals into the store. Cold-start on first run
  * (full sync window), incremental afterwards (since last sync timestamp).
  */
+import { performance } from "node:perf_hooks";
 import type { GitHubAdapter } from "../adapters/index.js";
 import type { PullRequest, RepoMaintainers } from "../types.js";
 import { parseCodeowners, type CodeownersRule } from "../scoring/codeowners.js";
@@ -164,6 +165,7 @@ export async function sync(
   const teamCache = new Map<string, string[]>();
 
   for (const repo of deps.repos) {
+    const repoStartedAt = performance.now();
     const lastSyncAt = await deps.store.getLastSyncAt(repo);
     const coldStart = lastSyncAt === undefined;
     const sinceIso = coldStart
@@ -216,7 +218,13 @@ export async function sync(
     await syncMaintainers(deps, repo, nowIso, teamCache);
 
     await deps.store.setLastSyncAt(repo, nowIso);
-    results.push({ repo, coldStart, syncedAtIso: nowIso, giantPrs });
+    results.push({
+      repo,
+      coldStart,
+      syncedAtIso: nowIso,
+      durationMs: Math.round(performance.now() - repoStartedAt),
+      giantPrs,
+    });
   }
 
   return results;
