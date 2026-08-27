@@ -77,6 +77,15 @@ The daily repost *is* the notification system — no separate DM/escalation infr
   assignment log. It holds **real reviewer names**, so the plaintext `data/` dir
   is never committed; the dashboard is published from an **encrypted** copy
   (`data.enc`) instead — see [Publishing](#publishing-the-dashboard-github-pages).
+- **Dashboard artifacts** (also under `data/`, all included in `data.enc`):
+  `assignments.open-prs.json` is the latest point-in-time open-PR snapshot used
+  for current age/staleness views; `assignments.response-times.json` is the
+  latest GitHub review-request/review/merge timing report; and
+  `assignments.overrides.jsonl` records observed manual reviewer changes. The
+  dashboard's History view combines the assignment log with PRs present in the
+  response report but absent from that log (including GitHub review-request rows
+  for merged PRs). Its age charts describe current open PRs, not historical PR
+  age at merge (historical records do not yet store `createdAt`).
 
 ## Status
 
@@ -98,11 +107,14 @@ node dist/cli.js sync        # fetch GitHub/Jira signals into ./siara.db
 node dist/cli.js dry-run     # score pending PRs, no side effects (start here)
 node dist/cli.js shadow      # compute + log recommendations, post nothing
 node dist/cli.js daily       # assign + comment + request review + log
-node dist/cli.js dashboard   # write ./dashboard.html from the assignment log
+node dist/cli.js backfill    # score current open PRs to populate difficulty bands
+node dist/cli.js admin       # run the local reviewer-admin page (port 4319)
+node dist/cli.js dashboard   # write ./dashboard.html from the dashboard artifacts
 ```
 
 The GitHub adapter shells out to the authenticated [`gh` CLI](https://cli.github.com/)
-— no tokens to configure, no extra dependencies. **Start with `dry-run`** to tune
+— use `gh auth login` locally or `GH_TOKEN` in the current container template;
+there are no extra application dependencies. **Start with `dry-run`** to tune
 config and build trust before going live.
 
 Environment: `SIARA_CONFIG` (default `./siara.config.json`), `SIARA_DB`
@@ -175,8 +187,9 @@ unencrypted or empty page. Encryption is symmetric AES-256 via `openssl`
 ## Deployment (Litestream + S3 on OpenShift/Clowder)
 
 Siara is a scheduled batch job (one `daily` run), not a long-running service.
-The container image runs Litestream to replicate `./siara.db` to S3-compatible
-object storage so SQLite state survives pod restarts without managed Postgres.
+The container image runs Litestream to replicate the configured `SIARA_DB`
+(default `/data/siara.db` in the image) to S3-compatible object storage so
+SQLite state survives pod restarts without managed Postgres.
 
 ### Flow
 
@@ -205,10 +218,17 @@ WAL mode is enabled in `SqliteStore` (required for Litestream).
 | `JIRA_USER` / `JIRA_ACCESS_TOKEN` | Jira API credentials |
 | `SLACK_TOKEN` | Slack bot token for daily workflow posts |
 
-On Clowder, mount secrets for tokens and config; Clowder provisions an
-`objectStore` bucket and injects credentials into `cdappconfig.json`. The
-entrypoint runs `scripts/clowder-env.mjs` to map that JSON to the Litestream
-env vars above.
+On Clowder, the current template mounts secrets for GitHub, Jira, and Slack
+credentials plus config; Clowder provisions an `objectStore` bucket and injects
+storage credentials into `cdappconfig.json`. The entrypoint runs
+`scripts/clowder-env.mjs` to map that JSON to the Litestream env vars above.
+
+> **Rehor deployment caveat:** the current Siara adapter/template still uses
+> direct `GH_TOKEN` and `JIRA_USER` / `JIRA_ACCESS_TOKEN` credentials. It is not
+> yet wired to Rehor's shared `devbot-proxy` (executor-backed `gh` and
+> proxy-hosted Jira MCP). Do not treat this template as the final shared-proxy
+> deployment: before production, remove GitHub/Jira credentials from the Siara
+> pod and use the proxy access path.
 
 See `config/clowdapp.yaml` for an OpenShift Template with a `ClowdApp` job
 (no `database:` block — persistence is Litestream + S3 only).
