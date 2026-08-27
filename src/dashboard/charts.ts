@@ -12,6 +12,10 @@ const BAND_LABEL: Record<DifficultyBand, string> = {
   hard: "Hard",
 };
 
+const AGE_BUCKET_LABELS = ["0-1d", "1-3d", "3-7d", "1-2w", "2-4w", "1-2mo", "2-3mo", "3mo+"];
+const AGE_BUCKET_EDGES = [0, 1, 3, 7, 14, 30, 60, 90, Infinity];
+const AGE_BUCKET_COLORS = ["#268bd2", "#2aa198", "#859900", "#b58900", "#cb4b16", "#d33682", "#6c71c4", "#dc322f"];
+
 /** Wrap chart body in a responsive, accessible SVG. */
 function svg(w: number, h: number, body: string, title: string): string {
   return `<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${escapeHtml(title)}" preserveAspectRatio="xMinYMin meet">${body}</svg>`;
@@ -102,6 +106,76 @@ export function renderAgeDistribution(openPrs: OpenPrSnapshot[]): string {
     </section>`;
 }
 
+/**
+ * Stacked age buckets by repository. Bar length shows total open PR volume;
+ * segment colors show how old each repository's open PRs are.
+ */
+export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
+  const byRepo = new Map<string, number[]>();
+  for (const pr of openPrs) {
+    if (pr.ageDays === undefined) continue;
+    const ages = byRepo.get(pr.repo) ?? [];
+    ages.push(pr.ageDays);
+    byRepo.set(pr.repo, ages);
+  }
+
+  if (byRepo.size === 0) {
+    return `<section><h2>PR age by repository</h2><p class="empty">No open PRs with known age by repository.</p></section>`;
+  }
+
+  const rows = [...byRepo.entries()]
+    .map(([repo, ages]) => ({ repo, ages }))
+    .sort((a, b) => b.ages.length - a.ages.length || a.repo.localeCompare(b.repo));
+  const maxTotal = Math.max(...rows.map((row) => row.ages.length), 1);
+  const W = 760;
+  const labelW = 190;
+  const plotW = 470;
+  const totalW = 70;
+  const padT = 10;
+  const padB = 12;
+  const rowH = 30;
+  const barH = 18;
+  const H = padT + rows.length * rowH + padB;
+
+  const body = rows.map(({ repo, ages }, rowIndex) => {
+    const y = padT + rowIndex * rowH + (rowH - barH) / 2;
+    const counts = AGE_BUCKET_LABELS.map(() => 0);
+    for (const age of ages) {
+      const edgeIndex = AGE_BUCKET_EDGES.findIndex((edge, i) => i > 0 && age < edge);
+      const bucketIndex = edgeIndex >= 0 ? edgeIndex - 1 : counts.length - 1;
+      counts[bucketIndex]! += 1;
+    }
+
+    let x = labelW;
+    const segments = counts.map((count, bucketIndex) => {
+      if (count === 0) return "";
+      const width = (count / maxTotal) * plotW;
+      const segment = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(width)}" height="${barH}" fill="${AGE_BUCKET_COLORS[bucketIndex]}" fill-opacity="0.82" rx="2"><title>${escapeHtml(repo)} — ${AGE_BUCKET_LABELS[bucketIndex]}: ${count} PR${count === 1 ? "" : "s"}</title></rect>`;
+      const number = width >= 20
+        ? `<text x="${fmt(x + width / 2)}" y="${fmt(y + barH / 2)}" class="seg-num" text-anchor="middle" dominant-baseline="central">${count}</text>`
+        : "";
+      x += width;
+      return segment + number;
+    }).join("");
+
+    const shortRepo = repo.split("/").pop() ?? repo;
+    const label = `<text x="${labelW - 10}" y="${fmt(y + barH / 2)}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(shortRepo)}<tspan class="svg-count"> (${ages.length})</tspan><title>${escapeHtml(repo)} — ${ages.length} open PR${ages.length === 1 ? "" : "s"}</title></text>`;
+    const total = `<text x="${labelW + plotW + 8}" y="${fmt(y + barH / 2)}" class="svg-count" dominant-baseline="central">${ages.length} total</text>`;
+    return label + segments + total;
+  }).join("");
+
+  const legend = AGE_BUCKET_LABELS.map((label, i) =>
+    `<li><span class="swatch" style="background:${AGE_BUCKET_COLORS[i]}"></span>${label}</li>`,
+  ).join("");
+
+  return `<section>
+      <h2>PR age by repository</h2>
+      <p class="section-hint">Open PR volume and age mix per repository. Bar length is total open PRs; segments are age buckets. Hover segments for counts.</p>
+      <ul class="legend">${legend}</ul>
+      <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Open PR age distribution by repository")}</div>
+    </section>`;
+}
+
 /** 
  * Render a histogram with quartile markers.
  * @param data - Ages to histogram
@@ -128,9 +202,10 @@ function renderHistogram(
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   
-  // Fixed time buckets aligned with industry SLAs and business expectations
-  const bucketEdges = [0, 1, 3, 7, 14, 30, 60, 90, Infinity];
-  const bucketLabels = ["0-1d", "1-3d", "3-7d", "1-2w", "2-4w", "1-2mo", "2-3mo", "3mo+"];
+  // Fixed time buckets aligned with industry SLAs and business expectations.
+  // Keep these shared with the per-repository chart below.
+  const bucketEdges = AGE_BUCKET_EDGES;
+  const bucketLabels = AGE_BUCKET_LABELS;
 
   // Build histogram bins
   const bins: { min: number; max: number; label: string; count: number }[] = [];

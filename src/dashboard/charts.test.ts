@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution } from "./charts.js";
+import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution, renderRepoAgeDistribution } from "./charts.js";
 import type { OpenPrSnapshot, ReviewResponse } from "../types.js";
 
 function merged(
@@ -56,6 +56,31 @@ describe("charts", () => {
       
       expect(html).toMatch(/\d+ outliers? detected/);
       expect(html).toContain("100d");
+    });
+  });
+
+  describe("renderRepoAgeDistribution", () => {
+    it("should render empty state when no PRs have known age", () => {
+      const html = renderRepoAgeDistribution([]);
+      expect(html).toContain("No open PRs with known age by repository");
+    });
+
+    it("should render stacked age buckets grouped by repository", () => {
+      const prs: OpenPrSnapshot[] = [
+        { repo: "org/alpha", pr: 1, title: "PR 1", author: "alice", assignees: [], ageDays: 1, staleness: "normal" },
+        { repo: "org/alpha", pr: 2, title: "PR 2", author: "bob", assignees: [], ageDays: 10, staleness: "warning" },
+        { repo: "org/beta", pr: 3, title: "PR 3", author: "carol", assignees: [], ageDays: 45, staleness: "overdue" },
+        { repo: "org/beta", pr: 4, title: "PR 4", author: "dave", assignees: [], ageDays: undefined, staleness: "normal" },
+      ];
+      const html = renderRepoAgeDistribution(prs);
+
+      expect(html).toContain("PR age by repository");
+      expect(html).toContain("alpha");
+      expect(html).toContain("beta");
+      expect(html).toContain("0-1d");
+      expect(html).toContain("1-2w");
+      expect(html).toContain("1-2mo");
+      expect(html).toContain("Open PR age distribution by repository");
     });
   });
 

@@ -4,7 +4,7 @@ import type { StrategyName } from "../scoring/pickReviewers.js";
 import { DEFAULT_TEAM_CONFIG } from "../config.js";
 import { buildMetrics, historyAssignments } from "./metrics.js";
 import { escapeHtml } from "./html.js";
-import { renderAgeDistribution, renderDifficultyAgeScatter, CHART_STYLES } from "./charts.js";
+import { renderAgeDistribution, renderDifficultyAgeScatter, renderRepoAgeDistribution, CHART_STYLES } from "./charts.js";
 
 const BANDS = ["simple", "moderate", "hard"] as const;
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -52,6 +52,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
     input.algorithm,
   );
   const ageDistSection = renderAgeDistribution(openPrs);
+  const repoAgeSection = renderRepoAgeDistribution(openPrs);
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
   const assignmentsSection = renderAssignmentsSection(openPrs, historyMetrics, dir);
 
@@ -143,6 +144,8 @@ ${STYLES}
     ${sankeySection}
 
     ${ageDistSection}
+
+    ${repoAgeSection}
 
     ${diffAgeScatter}
 

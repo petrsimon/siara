@@ -495,6 +495,7 @@ describe("generateDashboard", () => {
       generatedAtIso,
     });
     expect(html).toContain("Open PRs");
+    expect(html).toContain("PR age by repository");
     expect(html).toContain("Add auth guard");
     expect(html).toContain("6d");
     expect(html).toContain("overdue");
