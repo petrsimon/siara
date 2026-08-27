@@ -361,6 +361,8 @@ describe("generateDashboard", () => {
     expect(html).toContain('data-tab="open-prs"');
     expect(html).toContain('id="tab-open-prs"');
     expect(html).toContain('id="tab-overview"');
+    expect(html).toContain('data-tab="merge-matrix"');
+    expect(html).toContain('id="tab-merge-matrix"');
   });
 
   it("makes reviewer names link to the Open PRs tab filtered by that reviewer", () => {
