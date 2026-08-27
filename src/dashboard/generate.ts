@@ -4,7 +4,7 @@ import type { StrategyName } from "../scoring/pickReviewers.js";
 import { DEFAULT_TEAM_CONFIG } from "../config.js";
 import { buildMetrics, historyAssignments } from "./metrics.js";
 import { escapeHtml } from "./html.js";
-import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution, CHART_STYLES } from "./charts.js";
+import { renderAgeDistribution, renderDifficultyAgeScatter, CHART_STYLES } from "./charts.js";
 
 const BANDS = ["simple", "moderate", "hard"] as const;
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -46,13 +46,6 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const heatmap = renderHeatmap(input.assignments, dir);
   const sankeySection = renderSankey(metrics, dir);
   const openPrs = input.openPrs?.prs ?? [];
-  const waitingSection = renderMergeTimeDistribution(input.responseTimes?.responses ?? [], dir, input.windowDays);
-  const authorReviewerMatrix = renderAuthorReviewerMergeMatrix(
-    input.responseTimes?.responses ?? [],
-    dir,
-    openPrs,
-    input.windowDays,
-  );
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
   const algorithmSection = renderAlgorithmSection(
@@ -103,7 +96,6 @@ ${STYLES}
       <button class="tab active" type="button" data-tab="overview">Dashboard</button>
       <button class="tab" type="button" data-tab="open-prs">Open PRs</button>
       <button class="tab" type="button" data-tab="how">How it works</button>
-      <button class="tab" type="button" data-tab="merge-matrix">Merge times</button>
     </nav>
 
     <div class="tab-panel" id="tab-overview">
@@ -154,8 +146,6 @@ ${STYLES}
 
     ${diffAgeScatter}
 
-    ${waitingSection}
-
     ${overridesSection}
     </div>
 
@@ -165,10 +155,6 @@ ${STYLES}
 
     <div class="tab-panel hidden" id="tab-how">
     ${algorithmSection}
-    </div>
-
-    <div class="tab-panel hidden" id="tab-merge-matrix">
-    ${authorReviewerMatrix}
     </div>
 
     <footer>Generated at ${generatedAt}</footer>

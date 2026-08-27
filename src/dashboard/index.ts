@@ -23,18 +23,14 @@ export interface DashboardInput {
   /** Latest point-in-time open-PRs snapshot — powers the PR-age overview.
    *  Optional (older logs predate snapshots). */
   openPrs?: OpenPrsSnapshot;
-  /** Latest review-latency report — powers per-reviewer responsiveness stats
-   *  and the waiting-on-reviewers chart (age from assignment). Optional
-   *  (older logs predate it). */
+  /** Latest review-latency report — augments assignment history with merged PRs
+   *  and response metadata. Optional (older logs predate response reports). */
   responseTimes?: ResponseTimeReport;
   /** Reviewer directory (login → real name / email) for display + tooltips.
    *  Loaded from siara.config.json; absent → logins shown verbatim. */
   reviewers?: Record<string, { name?: string; email?: string }>;
   /** Age → colour thresholds (days). Loaded from config; absent → defaults. */
   staleness?: { warningDays: number; overdueDays: number };
-  /** Rolling history window (days) the sync captures — merge/response data only
-   *  covers this far back. Surfaced as a caveat on time-to-merge stats. */
-  windowDays?: number;
   /** Live scoring knobs, surfaced in the "How it works" doc so the explanation
    *  never drifts from the running config. Absent → shipped defaults are shown. */
   algorithm?: {

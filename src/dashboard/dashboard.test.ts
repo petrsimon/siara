@@ -361,8 +361,8 @@ describe("generateDashboard", () => {
     expect(html).toContain('data-tab="open-prs"');
     expect(html).toContain('id="tab-open-prs"');
     expect(html).toContain('id="tab-overview"');
-    expect(html).toContain('data-tab="merge-matrix"');
-    expect(html).toContain('id="tab-merge-matrix"');
+    expect(html).not.toContain('data-tab="merge-matrix"');
+    expect(html).not.toContain('id="tab-merge-matrix"');
   });
 
   it("makes reviewer names link to the Open PRs tab filtered by that reviewer", () => {
@@ -501,8 +501,7 @@ describe("generateDashboard", () => {
     // PR cell is a link to the GitHub PR, shown as repo/number (not repo#number).
     expect(html).toContain('href="https://github.com/org/repo/pull/7"');
     expect(html).toContain(">repo/7</a>");
-    expect(html).toContain("Time to merge");
-    expect(html).toContain("No merged PRs with a known review-request time");
+    expect(html).not.toContain("Time to merge");
     // Open-PRs table is sortable and searchable.
     expect(html).toContain('id="open-prs-table"');
     expect(html).toContain('class="sortable"');
@@ -519,7 +518,7 @@ describe("generateDashboard", () => {
     });
     expect(html).toContain("No open PRs in the latest snapshot.");
     expect(html).not.toContain("Response time");
-    expect(html).toContain("No merged PRs with a known review-request time");
+    expect(html).not.toContain("Time to merge");
   });
 
   it("combines current and history assignments in a tabbed section", () => {
@@ -574,35 +573,6 @@ describe("generateDashboard", () => {
     });
     expect(html).toContain("carol");
     expect(html).toContain("merged PRs from GitHub");
-  });
-
-  it("renders time-to-merge from merged PR response data", () => {
-    const html = generateDashboard({
-      assignments: [assignment({ assignees: ["bob"], band: "hard", pr: 7 })],
-      responseTimes: {
-        takenAt: "2026-08-25T10:00:00.000Z",
-        responses: [
-          {
-            repo: "org/repo",
-            pr: 7,
-            reviewer: "bob",
-            assignedAt: "2026-08-20T00:00:00.000Z",
-            firstReviewAt: "2026-08-22T00:00:00.000Z",
-            latencyHours: 48,
-            outstanding: false,
-            mergedAt: "2026-08-25T00:00:00.000Z",
-            mergeHours: 120,
-          },
-        ],
-      },
-      generatedAtIso,
-    });
-    expect(html).not.toContain("Response time");
-    expect(html).toContain("until the PR merged");
-    expect(html).toContain("Box shows quartiles");
-    expect(html).toContain("bob");
-    expect(html).toContain("5d");
-    expect(html).toContain("Author × reviewer time to merge");
   });
 
   it("shows PR difficulty metadata in the manual-override row", () => {

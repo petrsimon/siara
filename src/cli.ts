@@ -198,7 +198,6 @@ async function main(): Promise<void> {
       responseTimes: enrichedResponses,
       reviewers,
       staleness,
-      windowDays,
       algorithm,
       generatedAtIso: nowIso,
     });
