@@ -419,13 +419,14 @@ describe("generateDashboard", () => {
       assignments: [
         assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
         assignment({ assignees: ["alice"], band: "simple", pr: 2 }),
-        assignment({ assignees: ["bob"], band: "moderate", pr: 3 }),
+        assignment({ assignees: ["very-long-reviewer-name"], band: "moderate", pr: 3 }),
       ],
       generatedAtIso,
     });
-    // Sankey: band → reviewer flow with node counts.
+    // Sankey: band → reviewer flow with node counts and enough width for labels.
     expect(html).toContain("Assignment flow");
     expect(html).toContain("Ribbon thickness");
+    expect(html).toContain('viewBox="0 0 759 200"');
     // The redundant flame-graph "Workload breakdown" was removed.
     expect(html).not.toContain("Workload breakdown");
   });

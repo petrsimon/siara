@@ -498,13 +498,19 @@ function renderSankey(metrics: DashboardMetrics, dir: Directory): string {
     return `<section><h2>Assignment flow</h2><p class="empty">No assignments yet.</p></section>`;
   }
 
-  const W = 640;
   const nodeW = 14;
   const gap = 6;
   const leftLabelW = 104;
-  const rightLabelW = 128;
   const leftX = leftLabelW;
-  const rightX = W - rightLabelW - nodeW;
+  const plotW = 400;
+  // Reserve enough viewBox width for the longest reviewer label plus count.
+  // Previously the fixed 640px canvas clipped the final reviewer name.
+  const rightLabelW = Math.max(
+    160,
+    ...reviewers.map((login) => (displayName(login, dir).length + 8) * 7 + 10),
+  );
+  const rightX = leftX + nodeW + plotW;
+  const W = rightX + nodeW + rightLabelW;
 
   const maxGaps = Math.max(activeBands.length - 1, reviewers.length - 1) * gap;
   const plotH = Math.max(200, reviewers.length * 30);
@@ -528,7 +534,7 @@ function renderSankey(metrics: DashboardMetrics, dir: Directory): string {
     revCursor.set(login, ry);
     ry += (metrics.reviewsPerPerson[login] ?? 0) * unit + gap;
   }
-  const H = Math.max(ly, ry) - gap;
+  const H = Math.ceil(Math.max(ly, ry) - gap);
 
   // Links: outer loop = band keeps right-side stacking in band order.
   const links: string[] = [];
