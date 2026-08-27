@@ -956,13 +956,24 @@ function renderAlgorithmSection(
 ): string {
   const a = algo ?? DEFAULT_ALGO;
   const av = a.availability;
-  const fu = DEFAULT_TEAM_CONFIG.followUpAffinity;
-  const far = DEFAULT_TEAM_CONFIG.filesAtRisk;
-  const soft = DEFAULT_TEAM_CONFIG.soft;
+  const fu = a.followUpAffinity ?? DEFAULT_TEAM_CONFIG.followUpAffinity;
+  const far = a.filesAtRisk ?? DEFAULT_TEAM_CONFIG.filesAtRisk;
+  const soft = a.soft ?? DEFAULT_TEAM_CONFIG.soft;
+  const pathRisk = a.pathRisk ?? {
+    labels: [...new Set(
+      DEFAULT_TEAM_CONFIG.pathRisk.rules
+        .filter((rule) => rule.multiplier > 1)
+        .map((rule) => rule.label ?? rule.pattern),
+    )],
+    bandFloorMultiplier: DEFAULT_TEAM_CONFIG.pathRisk.bandFloorMultiplier,
+    bandFloor: DEFAULT_TEAM_CONFIG.pathRisk.bandFloor,
+  };
+  const riskLabels = pathRisk.labels.length > 0 ? pathRisk.labels.join(", ") : "configured high-risk paths";
   const liveLabel = STRAT_LABELS[MAIN_STRATEGY] ?? MAIN_STRATEGY;
 
   const stages: Array<[string, string]> = [
     ["PR", "diff + paths"],
+    ["Eligible", "roster + owners"],
     ["Difficulty", "size × risk"],
     ["Band", "simple/mod/hard"],
     ["Route", "by band"],
@@ -972,7 +983,7 @@ function renderAlgorithmSection(
   ];
   const W = 640;
   const boxH = 46;
-  const boxW = 76;
+  const boxW = 70;
   const gap = (W - stages.length * boxW) / (stages.length - 1);
   const y = 8;
   let px = 0;
@@ -1006,10 +1017,12 @@ function renderAlgorithmSection(
 
   return `<section>
       <h2>How it works</h2>
-      <p class="section-hint">Deterministic, no LLM: identical inputs always produce identical assignments (ties broken by a seeded dice). The live strategy is <strong>${escapeHtml(liveLabel)}</strong> — score floor, decoupled load penalty, and top-5 spread (the CLI runs it as <code>siara</code>). Knobs below reflect the config used when this dashboard was generated.</p>
+      <p class="section-hint">Deterministic, no LLM: identical inputs always produce identical assignments (ties broken by a seeded dice). The live strategy is <strong>${escapeHtml(liveLabel)}</strong> — score floor, decoupled load penalty, and top-5 spread (the CLI runs it as <code>siara</code>). Knobs below reflect the team-level config loaded when this dashboard was generated; repo-specific overrides may differ.</p>
       ${diagram}
+      <h3 class="algo-h3">0 · Eligibility and decline handling</h3>
+      <p class="algo-p">Before scoring, candidates must be on the roster, not blocklisted, not the PR author, and not already requested. When CODEOWNERS/maintainer data is available, a matching roster owner or maintainer gate narrows the pool; if no roster candidate matches, the normal pool remains. If GitHub removes a reviewer previously suggested by Siara, the next daily run records the decline and reassigns while excluding declined reviewers. Manual reviewer changes are respected; if every candidate declines, the first configured team lead is used as fallback.</p>
       <h3 class="algo-h3">1 · Difficulty → band</h3>
-      <p class="algo-p">Each PR gets a 0–1 difficulty from churn, file count, and directory spread, then multiplied up for risky paths (auth, crypto, migrations, secrets…). The score falls into a band that decides <em>how</em> to route:</p>
+      <p class="algo-p">Each PR gets a 0–1 difficulty from churn, file count, and directory spread, then multiplied up for configured risky paths (${escapeHtml(riskLabels)}). A matching rule at or above <code>${pathRisk.bandFloorMultiplier}</code> floors the result at <code>${pathRisk.bandFloor}</code>. The score falls into a band that decides <em>how</em> to route:</p>
       ${routing}
       <h3 class="algo-h3">2 · Score floor (simple band)</h3>
       <p class="algo-p">On simple PRs, the education path scores <code>max(0.35, 1 − familiarity)</code>. Without the floor, experts score 0 on familiar code, which makes the availability penalty irrelevant and piles all simple work on the same few newcomers. The floor keeps experts scoreable so load pressure can redistribute simple PRs across the team.</p>

@@ -48,6 +48,22 @@ export interface DashboardInput {
       hardWipPenalty: number;
       maxPenaltyFraction: number;
     };
+    followUpAffinity?: {
+      branchFamilyBoost: number;
+      epicBoost: number;
+      windowDays: number;
+    };
+    filesAtRisk?: { spreadBoost: number };
+    soft?: {
+      estimateExpertBoost: number;
+      priorityExpertBoost: number;
+      highPriorityLoadPenalty: number;
+    };
+    pathRisk?: {
+      labels: string[];
+      bandFloorMultiplier: number;
+      bandFloor: DifficultyBand;
+    };
   };
   /** Strategy comparison data — computed by `siara compare`, optional. */
   strategyComparison?: StrategyComparison;

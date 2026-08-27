@@ -157,6 +157,18 @@ async function main(): Promise<void> {
           hardWipPenalty: teamConfig.availability.hardWipPenalty,
           maxPenaltyFraction: teamConfig.availability.maxPenaltyFraction,
         },
+        followUpAffinity: teamConfig.followUpAffinity,
+        filesAtRisk: { spreadBoost: teamConfig.filesAtRisk.spreadBoost },
+        soft: teamConfig.soft,
+        pathRisk: {
+          labels: [...new Set(
+            teamConfig.pathRisk.rules
+              .filter((rule) => rule.multiplier > 1)
+              .map((rule) => rule.label ?? rule.pattern),
+          )],
+          bandFloorMultiplier: teamConfig.pathRisk.bandFloorMultiplier,
+          bandFloor: teamConfig.pathRisk.bandFloor,
+        },
       };
     } catch {
       // No config available — fall back to defaults inside the renderer.

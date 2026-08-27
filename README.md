@@ -33,6 +33,13 @@ PR inputs → filter eligible → difficulty score (3 bands)
           → assign top N + log rationale as a PR comment
 ```
 
+Before scoring, eligibility removes blocklisted users, the PR author, already
+requested reviewers, and recorded decliners. When maintainer data is available,
+CODEOWNERS/maintainer matches narrow the pool when at least one roster member
+matches; otherwise the normal roster pool remains. If a previously suggested
+reviewer is removed from GitHub, the next daily run records the decline and
+reassigns without that reviewer. Manual reviewer changes are respected.
+
 All scoring is **pure and deterministic**: ties break with a seeded dice on
 `(prNumber, login)`, so the same inputs always produce the same assignment.
 

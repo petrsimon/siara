@@ -444,6 +444,10 @@ describe("generateDashboard", () => {
           hardWipPenalty: 0.5,
           maxPenaltyFraction: 0.9,
         },
+        followUpAffinity: { branchFamilyBoost: 0.4, epicBoost: 0.5, windowDays: 7 },
+        filesAtRisk: { spreadBoost: 0.22 },
+        soft: { estimateExpertBoost: 0.3, priorityExpertBoost: 0.4, highPriorityLoadPenalty: 0.5 },
+        pathRisk: { labels: ["deployment", "schema"], bandFloorMultiplier: 2, bandFloor: "moderate" },
       },
       generatedAtIso,
     });
@@ -454,6 +458,11 @@ describe("generateDashboard", () => {
     expect(html).toContain("siara-v2");
     expect(html).toContain("Review assignments");
     expect(html).toContain("Continuity boosts");
+    expect(html).toContain("Eligibility and decline handling");
+    expect(html).toContain("deployment, schema");
+    expect(html).toContain("0.4");
+    expect(html).toContain("0.22");
+    expect(html).toContain("0.3");
     // The pipeline diagram (arrow marker) and the WIP cap explained with live values.
     expect(html).toContain('id="arw"');
     expect(html).toContain("WhoDo");
