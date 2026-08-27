@@ -1,0 +1,93 @@
+---
+apiVersion: v1
+kind: Template
+metadata:
+  name: siara
+objects:
+  - apiVersion: cloud.redhat.com/v1alpha1
+    kind: ClowdApp
+    metadata:
+      name: siara
+    spec:
+      envName: ${ENV_NAME}
+      # Litestream + S3 object storage — no Clowder-managed Postgres.
+      objectStore:
+        - siara
+      jobs:
+        - name: daily
+          schedule: ${SCHEDULE}
+          concurrencyPolicy: Forbid
+          successfulJobsHistoryLimit: 3
+          failedJobsHistoryLimit: 1
+          podSpec:
+            name: siara
+            image: ${IMAGE}:${IMAGE_TAG}
+            env:
+              - name: SIARA_CMD
+                value: daily
+              - name: SIARA_CONFIG
+                value: /etc/siara/siara.config.json
+              - name: ACG_CONFIG
+                value: /cdappconfig.json
+              - name: GH_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: ${SECRET_NAME}
+                    key: GH_TOKEN
+              - name: JIRA_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: ${SECRET_NAME}
+                    key: JIRA_USER
+              - name: JIRA_ACCESS_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: ${SECRET_NAME}
+                    key: JIRA_ACCESS_TOKEN
+              - name: SLACK_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: ${SECRET_NAME}
+                    key: SLACK_TOKEN
+            resources:
+              requests:
+                memory: ${MEMORY_REQUEST}
+                cpu: ${CPU_REQUEST}
+              limits:
+                memory: ${MEMORY_LIMIT}
+                cpu: ${CPU_LIMIT}
+            volumeMounts:
+              - name: siara-config
+                mountPath: /etc/siara
+                readOnly: true
+            volumes:
+              - name: siara-config
+                secret:
+                  secretName: ${CONFIG_SECRET_NAME}
+parameters:
+  - name: ENV_NAME
+    description: ClowdEnvironment name (e.g. env-ephemeral)
+    required: true
+  - name: IMAGE
+    description: Container image repository
+    value: quay.io/redhat-services-prod/siara
+  - name: IMAGE_TAG
+    description: Container image tag
+    value: latest
+  - name: SCHEDULE
+    description: Cron schedule for the daily assignment job
+    value: "0 8 * * *"
+  - name: SECRET_NAME
+    description: Secret holding GH_TOKEN, JIRA_*, and SLACK_TOKEN
+    value: siara-secrets
+  - name: CONFIG_SECRET_NAME
+    description: Secret holding siara.config.json
+    value: siara-config
+  - name: MEMORY_REQUEST
+    value: 256Mi
+  - name: MEMORY_LIMIT
+    value: 512Mi
+  - name: CPU_REQUEST
+    value: 100m
+  - name: CPU_LIMIT
+    value: "1"
