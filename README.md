@@ -165,6 +165,75 @@ unencrypted or empty page. Encryption is symmetric AES-256 via `openssl`
 > Fallback: if the repo moves to a GitHub Enterprise org, switch to native
 > **private GitHub Pages** (org-member auth) and drop StatiCrypt.
 
+## Deployment (Litestream + S3 on OpenShift/Clowder)
+
+Siara is a scheduled batch job (one `daily` run), not a long-running service.
+The container image runs Litestream to replicate `./siara.db` to S3-compatible
+object storage so SQLite state survives pod restarts without managed Postgres.
+
+### Flow
+
+1. **Restore** — on startup, `litestream restore -if-replica-exists` pulls the
+   latest replica into `SIARA_DB` (no-op on first run).
+2. **Replicate + exec** — `litestream replicate -exec "siara daily"` streams
+   WAL changes while the command runs and performs a final sync on exit; the
+   command's exit code is propagated.
+
+WAL mode is enabled in `SqliteStore` (required for Litestream).
+
+### Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `SIARA_DB` | SQLite path (default `/data/siara.db` in the image) |
+| `SIARA_CMD` | Subcommand to run under Litestream (default `daily`) |
+| `SIARA_CONFIG` | Path to `siara.config.json` |
+| `REPLICA_URL` | S3 replica URL, e.g. `s3://bucket-name/siara` |
+| `LITESTREAM_ACCESS_KEY_ID` | S3 access key (auto-read by Litestream) |
+| `LITESTREAM_SECRET_ACCESS_KEY` | S3 secret key (auto-read by Litestream) |
+| `LITESTREAM_ENDPOINT` | S3-compatible endpoint, e.g. `http://minio:9000` (MinIO/Clowder ephemeral) |
+| `LITESTREAM_CONFIG` | Litestream config path (default `/opt/app-root/src/litestream.yml`) |
+| `ACG_CONFIG` | Clowder `cdappconfig.json` path (default `/cdappconfig.json`) |
+| `GH_TOKEN` | GitHub API token for the `gh` CLI |
+| `JIRA_USER` / `JIRA_ACCESS_TOKEN` | Jira API credentials |
+| `SLACK_TOKEN` | Slack bot token for daily workflow posts |
+
+On Clowder, mount secrets for tokens and config; Clowder provisions an
+`objectStore` bucket and injects credentials into `cdappconfig.json`. The
+entrypoint runs `scripts/clowder-env.mjs` to map that JSON to the Litestream
+env vars above.
+
+See `config/clowdapp.yaml` for an OpenShift Template with a `ClowdApp` job
+(no `database:` block — persistence is Litestream + S3 only).
+
+### Local Docker (no bucket)
+
+Build and run without `REPLICA_URL` to skip Litestream (dev/local):
+
+```sh
+docker build -t siara:local .
+docker run --rm \
+  -e GH_TOKEN="$GH_TOKEN" \
+  -e SIARA_CONFIG=/etc/siara/siara.config.json \
+  -v "$PWD/siara.config.json:/etc/siara/siara.config.json:ro" \
+  siara:local
+```
+
+With S3 or MinIO, export `REPLICA_URL` and `LITESTREAM_*` (or rely on
+`ACG_CONFIG` / Clowder). Example with MinIO:
+
+```sh
+export REPLICA_URL=s3://siara/siara
+export LITESTREAM_ACCESS_KEY_ID=minioadmin
+export LITESTREAM_SECRET_ACCESS_KEY=minioadmin
+export LITESTREAM_ENDPOINT=http://localhost:9000
+docker run --rm --network host -e REPLICA_URL -e LITESTREAM_ACCESS_KEY_ID \
+  -e LITESTREAM_SECRET_ACCESS_KEY -e LITESTREAM_ENDPOINT \
+  -e GH_TOKEN="$GH_TOKEN" \
+  -v "$PWD/siara.config.json:/etc/siara/siara.config.json:ro" \
+  siara:local
+```
+
 ## Security
 
 - **No shell injection** — the GitHub adapter shells to `gh` via `execFile` with

@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +46,24 @@ describe("SqliteStore", () => {
   it("init() is idempotent", async () => {
     await expect(store.init()).resolves.toBeUndefined();
     await expect(store.init()).resolves.toBeUndefined();
+  });
+
+  it("opens the database with WAL journal mode", async () => {
+    const dbPath = join(tmpdir(), `siara-wal-${fixtureCounter++}.db`);
+    const path = nextAssignmentsPath("wal");
+    const walStore = openStore({ dbPath, assignmentsPath: path });
+    await walStore.init();
+
+    const probe = new Database(dbPath, { readonly: true });
+    expect(probe.pragma("journal_mode", { simple: true })).toBe("wal");
+    probe.close();
+    await walStore.close();
+
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const file = `${dbPath}${suffix}`;
+      if (existsSync(file)) unlinkSync(file);
+    }
+    if (existsSync(path)) unlinkSync(path);
   });
 
   it("upsertCommitHistory filters commitsByPath to PR paths and parent dirs", async () => {

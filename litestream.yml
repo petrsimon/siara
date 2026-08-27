@@ -1,0 +1,9 @@
+# Litestream config for siara SQLite → S3-compatible object storage.
+# Credentials and endpoints come from env (Clowder objectStore or manual export).
+# LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY are auto-read when unset here.
+dbs:
+  - path: ${SIARA_DB}
+    replica:
+      url: ${REPLICA_URL}
+      endpoint: ${LITESTREAM_ENDPOINT}
+      force-path-style: true
