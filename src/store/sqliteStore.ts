@@ -5,15 +5,17 @@ import Database from "better-sqlite3";
 import type {
   Assignment,
   CandidateHistory,
+  Decline,
   JiraData,
   OpenPrsSnapshot,
   Override,
   PullRequest,
   RecentReview,
+  RepoMaintainers,
   ResponseTimeReport,
   ReviewHistoryPage,
 } from "../types.js";
-import { dirOf } from "../util/paths.js";
+import { pathsForPr } from "../util/paths.js";
 import { appendAssignmentFile, readAssignmentsFile } from "./assignmentsLog.js";
 import {
   appendOverrideFile,
@@ -108,6 +110,22 @@ export class SqliteStore implements SiaraStore {
       CREATE TABLE IF NOT EXISTS sync_state (
         repo TEXT PRIMARY KEY,
         last_sync_at TEXT NOT NULL
+      );
+
+      -- maintainers: cached CODEOWNERS + maintain/admin collaborators per repo.
+      CREATE TABLE IF NOT EXISTS maintainers (
+        repo TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        fetched_at TEXT NOT NULL
+      );
+
+      -- declines: reviewers removed after Siara assigned them.
+      CREATE TABLE IF NOT EXISTS declines (
+        repo TEXT NOT NULL,
+        pr INTEGER NOT NULL,
+        login TEXT NOT NULL,
+        at TEXT NOT NULL,
+        PRIMARY KEY (repo, pr, login)
       );
     `);
   }
@@ -286,7 +304,7 @@ export class SqliteStore implements SiaraStore {
     pr: PullRequest,
     logins: string[],
   ): Promise<CandidateHistory[]> {
-    const relevantPaths = pathsForPr(pr);
+    const relevantPaths = new Set(pathsForPr(pr));
 
     const commitsStmt = this.db.prepare(
       `SELECT path, count FROM commit_history WHERE repo = ? AND login = ?`,
@@ -410,6 +428,43 @@ export class SqliteStore implements SiaraStore {
     return readResponseReport(this.responsePath);
   }
 
+  async upsertMaintainers(data: RepoMaintainers): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO maintainers (repo, data, fetched_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (repo) DO UPDATE SET
+           data = excluded.data,
+           fetched_at = excluded.fetched_at`,
+      )
+      .run(data.repo, JSON.stringify(data), data.fetchedAt);
+  }
+
+  async getMaintainers(repo: string): Promise<RepoMaintainers | undefined> {
+    const row = this.db
+      .prepare(`SELECT data FROM maintainers WHERE repo = ?`)
+      .get(repo) as { data: string } | undefined;
+    if (!row) {
+      return undefined;
+    }
+    return JSON.parse(row.data) as RepoMaintainers;
+  }
+
+  async recordDecline(d: Decline): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO declines (repo, pr, login, at) VALUES (?, ?, ?, ?)`,
+      )
+      .run(d.repo, d.pr, d.login, d.at);
+  }
+
+  async getDeclines(repo: string, pr: number): Promise<string[]> {
+    const rows = this.db
+      .prepare(`SELECT login FROM declines WHERE repo = ? AND pr = ?`)
+      .all(repo, pr) as Array<{ login: string }>;
+    return rows.map((r) => r.login);
+  }
+
   async close(): Promise<void> {
     this.db.close();
   }
@@ -418,14 +473,4 @@ export class SqliteStore implements SiaraStore {
 /** Open a store at the given paths. Caller must call init() before use. */
 export function openStore(opts: StoreOptions): SqliteStore {
   return new SqliteStore(opts);
-}
-
-/** File paths and parent dirs touched by a PR — used to filter commit history. */
-function pathsForPr(pr: PullRequest): Set<string> {
-  const paths = new Set<string>();
-  for (const file of pr.files) {
-    paths.add(file.path);
-    paths.add(dirOf(file.path));
-  }
-  return paths;
 }

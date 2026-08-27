@@ -4,6 +4,7 @@
  * These are the contracts every scorer, adapter, and orchestrator implements
  * against. Keep this file free of logic — types and enums only.
  */
+import type { CodeownersRule } from "./scoring/codeowners.js";
 
 // ---------------------------------------------------------------------------
 // PR / diff inputs
@@ -157,6 +158,26 @@ export interface DifficultyResult {
     /** The band computed from size alone, before any risk floor. */
     sizeBand: DifficultyBand;
   };
+}
+
+/** Cached CODEOWNERS + maintain/admin collaborators for reviewer gating. */
+export interface RepoMaintainers {
+  repo: string;
+  /** ISO timestamp when this cache row was fetched. */
+  fetchedAt: string;
+  /** Owners resolved to logins (teams expanded, "@" stripped). */
+  codeownersRules: CodeownersRule[];
+  /** Logins with maintain/admin permission on the repo. */
+  collaborators: string[];
+}
+
+/** A reviewer removed from a PR after Siara assigned them — treated as a decline. */
+export interface Decline {
+  repo: string;
+  pr: number;
+  login: string;
+  /** ISO timestamp of the removal event. */
+  at: string;
 }
 
 /** A single candidate after full scoring, ready to sort. */

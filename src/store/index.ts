@@ -13,10 +13,12 @@ import type { HistoryStore } from "../adapters/index.js";
 import type {
   Assignment,
   CandidateHistory,
+  Decline,
   JiraData,
   OpenPrsSnapshot,
   Override,
   PullRequest,
+  RepoMaintainers,
   ResponseTimeReport,
   ReviewHistoryPage,
 } from "../types.js";
@@ -55,6 +57,15 @@ export interface SiaraStore extends HistoryStore {
   /** Cache Jira signals for a ticket. */
   upsertJira(key: string, data: JiraData): Promise<void>;
   getJira(key: string): Promise<JiraData | undefined>;
+
+  /** Cached CODEOWNERS + maintain/admin collaborators for reviewer gating. */
+  upsertMaintainers(data: RepoMaintainers): Promise<void>;
+  getMaintainers(repo: string): Promise<RepoMaintainers | undefined>;
+
+  /** Record a reviewer decline (idempotent on repo+pr+login). */
+  recordDecline(d: Decline): Promise<void>;
+  /** Logins that declined review on this PR. */
+  getDeclines(repo: string, pr: number): Promise<string[]>;
 
   // --- sync bookkeeping ------------------------------------------------------
   getLastSyncAt(repo: string): Promise<string | undefined>;

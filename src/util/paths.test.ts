@@ -49,4 +49,13 @@ describe("matchGlob", () => {
     expect(matchGlob("a.b.c", "a.b.c")).toBe(true);
     expect(matchGlob("axbxc", "a.b.c")).toBe(false); // '.' is literal, not any-char
   });
+
+  it("treats literal uppercase G/S as literals, not wildcards", () => {
+    // Regression: glob sentinels must not collide with literal letters, or a
+    // pattern like "Session.ts" / "Gateway.ts" would match anything.
+    expect(matchGlob("Session.ts", "Session.ts")).toBe(true);
+    expect(matchGlob("Xession.ts", "Session.ts")).toBe(false);
+    expect(matchGlob("src/Gateway/x.ts", "**/Gateway/**")).toBe(true);
+    expect(matchGlob("src/Runway/x.ts", "**/Gateway/**")).toBe(false);
+  });
 });

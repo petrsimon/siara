@@ -25,6 +25,12 @@ export interface GitHubMockFixture {
   reviewRequestEvents?: Record<string, ReviewRequestEvent[]>;
   /** Recently-merged PRs keyed by repo. */
   mergedPullRequests?: Record<string, MergedPullRequest[]>;
+  /** Raw CODEOWNERS text keyed by repo. */
+  codeownersText?: Record<string, string>;
+  /** Org team members keyed by `${org}/${teamSlug}`. */
+  teamMembers?: Record<string, string[]>;
+  /** Maintain/admin collaborators keyed by repo. */
+  maintainCollaborators?: Record<string, string[]>;
 }
 
 export interface RecordedComment {
@@ -145,5 +151,17 @@ export class MockGitHubAdapter implements GitHubAdapter {
     logins: string[],
   ): Promise<void> {
     this.reviewRequests.push({ repo, prNumber, logins: [...logins] });
+  }
+
+  async getCodeownersText(repo: string): Promise<string | undefined> {
+    return this.fixture.codeownersText?.[repo];
+  }
+
+  async getTeamMembers(org: string, teamSlug: string): Promise<string[]> {
+    return this.fixture.teamMembers?.[`${org}/${teamSlug}`] ?? [];
+  }
+
+  async getMaintainCollaborators(repo: string): Promise<string[]> {
+    return this.fixture.maintainCollaborators?.[repo] ?? [];
   }
 }

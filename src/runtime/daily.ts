@@ -4,6 +4,7 @@
  * completed PRs dropped. Honors DailyOptions.dryRun (no side effects).
  */
 import { resolveConfig } from "../config.js";
+import { ownersForPaths } from "../scoring/codeowners.js";
 import { pickReviewers } from "../scoring/pickReviewers.js";
 import { scoreDifficulty } from "../scoring/difficulty.js";
 import { formatRationale, toAssignment } from "../rationale.js";
@@ -16,6 +17,7 @@ import type {
   ReviewResponse,
 } from "../types.js";
 import { firstRequestedAt, openRequestStartedAt } from "../adapters/github.js";
+import { detectDeclines } from "./declines.js";
 import { sync } from "./sync.js";
 import { daysBetween, hoursBetween, subtractDays } from "./dates.js";
 import { buildStalenessRepostText, stalenessLevel } from "./staleness.js";
@@ -284,6 +286,12 @@ export async function daily(
   // divergence we already logged (so we don't re-log the same change daily).
   const priorAssignments = await deps.store.readAssignments();
   const suggestions = latestSuggestions(priorAssignments);
+  // Genuine Siara picks only — [AUTO-SCORED] rows carry the PR's *manual*
+  // reviewers, so they must not count as Siara suggestions when deciding
+  // whether a removed reviewer is a decline.
+  const genuineSuggestions = latestSuggestions(
+    priorAssignments.filter((a) => !a.rationale.startsWith("[AUTO-SCORED]")),
+  );
   const bands = latestBands(priorAssignments);
   const loggedOverrideActuals = latestOverrideActuals(
     await deps.store.readOverrides(),
@@ -369,6 +377,35 @@ export async function daily(
     for (const r of logins) hardLoad.set(r, (hardLoad.get(r) ?? 0) + 1);
   };
 
+  // Record reviewer declines before assignment decisions.
+  for (const repo of deps.repos) {
+    const openPrs = openPrsByRepo.get(repo) ?? [];
+    if (openPrs.length === 0) {
+      continue;
+    }
+    const events = await deps.github.getReviewRequestEvents(
+      repo,
+      openPrs.map((p) => p.number),
+    );
+    const suggestedByPr = new Map<number, string[]>();
+    for (const pr of openPrs) {
+      const suggested = genuineSuggestions.get(prKey(repo, pr.number));
+      if (suggested) {
+        suggestedByPr.set(pr.number, suggested);
+      }
+    }
+    for (const d of detectDeclines(openPrs, events, suggestedByPr)) {
+      if (!dry) {
+        await deps.store.recordDecline({
+          repo,
+          pr: d.pr,
+          login: d.login,
+          at: d.at,
+        });
+      }
+    }
+  }
+
   for (const repo of deps.repos) {
     const resolved = findRepoConfig(deps, repo);
     const openPrs = openPrsByRepo.get(repo) ?? [];
@@ -442,8 +479,13 @@ export async function daily(
       // (it's "assigned" in shadow terms) — re-scoring it against accumulated
       // load would churn the recommendation every run. It's already counted in
       // the shadowLoad seed above; report it unchanged and move on.
+      // Decline reassignments bypass this — they need a fresh pick.
       const prKeyStr = prKey(repo, pr.number);
-      const standing = !doPost ? suggestions.get(prKeyStr) : undefined;
+      const declines = await deps.store.getDeclines(repo, pr.number);
+      const isDeclineReassign =
+        declines.length > 0 && suggestions.has(prKeyStr);
+      const standing =
+        !doPost && !isDeclineReassign ? suggestions.get(prKeyStr) : undefined;
       if (standing) {
         // Score if band is missing - ensures complete difficulty data
         let band = bands.get(prKeyStr);
@@ -492,6 +534,22 @@ export async function daily(
       const jira = pr.jiraKey
         ? await deps.store.getJira(pr.jiraKey)
         : undefined;
+
+      const maintainers = await deps.store.getMaintainers(repo);
+      let eligibleOwners: string[] | undefined;
+      if (maintainers) {
+        // CODEOWNERS matches files (not directories) — feed only real file
+        // paths, never the parent dirs pathsForPr adds for commit history.
+        const pathOwners = ownersForPaths(
+          maintainers.codeownersRules,
+          pr.files.map((f) => f.path),
+        );
+        const rosterSet = new Set(resolved.roster);
+        eligibleOwners = [
+          ...new Set([...pathOwners, ...maintainers.collaborators]),
+        ].filter((login) => rosterSet.has(login));
+      }
+
       const result = pickReviewers({
         pr,
         config: resolved,
@@ -499,31 +557,49 @@ export async function daily(
         jira,
         nowIso,
         strategy: opts.strategy,
+        eligibleOwners,
+        declined: isDeclineReassign ? declines : undefined,
       });
-      if (!doPost && result.assignees.length > 0) {
-        bumpShadowLoad(result.assignees);
+      let assignees = result.assignees;
+      const extraNotes = [...result.notes];
+      if (isDeclineReassign && assignees.length === 0) {
+        const lead = resolved.managers[0];
+        if (lead) {
+          assignees = [lead];
+          extraNotes.push(
+            `all candidates declined — routed to team lead @${lead}`,
+          );
+        } else {
+          console.warn(
+            `daily: all candidates declined on ${repo}#${pr.number} but no team lead configured`,
+          );
+        }
+      }
+      const resultWithNotes = { ...result, assignees, notes: extraNotes };
+      if (!doPost && resultWithNotes.assignees.length > 0) {
+        bumpShadowLoad(resultWithNotes.assignees);
       }
       // Hard-WIP load accrues in both modes so later hard PRs in the batch see
       // this pick and overflow past the cap to the next expert.
-      if (result.difficulty.band === "hard" && result.assignees.length > 0) {
-        bumpHardLoad(result.assignees);
+      if (resultWithNotes.difficulty.band === "hard" && resultWithNotes.assignees.length > 0) {
+        bumpHardLoad(resultWithNotes.assignees);
       }
 
       const rationaleInput = {
         repo,
         prNumber: pr.number,
-        result,
+        result: resultWithNotes,
         date: nowIso.slice(0, 10),
       };
       const rationale = formatRationale(rationaleInput);
       const assignment = toAssignment(rationaleInput);
 
-      assigneesByPr.set(`${repo}#${pr.number}`, result.assignees);
+      assigneesByPr.set(`${repo}#${pr.number}`, resultWithNotes.assignees);
 
-      if (!dry && result.assignees.length > 0) {
+      if (!dry && resultWithNotes.assignees.length > 0) {
         if (doPost) {
           await deps.github.postComment(repo, pr.number, rationale);
-          await deps.github.requestReviewers(repo, pr.number, result.assignees);
+          await deps.github.requestReviewers(repo, pr.number, resultWithNotes.assignees);
           if (deps.slack) {
             await deps.slack.postAssignment(undefined, rationale);
           }
@@ -532,7 +608,7 @@ export async function daily(
         // a reviewer on GitHub), so only append when the recommendation is new
         // or has changed since the last logged pick for this PR.
         const prevPick = suggestions.get(prKey(repo, pr.number));
-        const pick = [...result.assignees].sort();
+        const pick = [...resultWithNotes.assignees].sort();
         if (!prevPick || !sameSet(prevPick, pick)) {
           await deps.store.appendAssignment(assignment);
           suggestions.set(prKey(repo, pr.number), pick);
@@ -542,13 +618,13 @@ export async function daily(
       assigned.push({
         repo,
         pr: pr.number,
-        assignees: result.assignees,
-        band: result.difficulty.band,
+        assignees: resultWithNotes.assignees,
+        band: resultWithNotes.difficulty.band,
         rationale,
       });
 
       snapshotPrs.push(
-        snapshotRow(pr, result.assignees, result.difficulty.band),
+        snapshotRow(pr, resultWithNotes.assignees, resultWithNotes.difficulty.band),
       );
     }
   }

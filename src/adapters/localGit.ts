@@ -201,4 +201,16 @@ export class LocalGitGitHubAdapter implements GitHubAdapter {
   requestReviewers(repo: string, prNumber: number, logins: string[]): Promise<void> {
     return this.base.requestReviewers(repo, prNumber, logins);
   }
+
+  getCodeownersText(repo: string): Promise<string | undefined> {
+    return this.base.getCodeownersText(repo);
+  }
+
+  getTeamMembers(org: string, teamSlug: string): Promise<string[]> {
+    return this.base.getTeamMembers(org, teamSlug);
+  }
+
+  getMaintainCollaborators(repo: string): Promise<string[]> {
+    return this.base.getMaintainCollaborators(repo);
+  }
 }
