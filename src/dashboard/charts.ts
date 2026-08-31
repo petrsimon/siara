@@ -3,7 +3,12 @@
  * Rendered as inline SVG in the dashboard.
  */
 
-import type { DifficultyBand, OpenPrSnapshot, ReviewResponse } from "../types.js";
+import type {
+  DifficultyBand,
+  OpenPrSnapshot,
+  ReadyForReviewAssignment,
+  ReviewResponse,
+} from "../types.js";
 import { escapeHtml } from "./html.js";
 
 const BAND_LABEL: Record<DifficultyBand, string> = {
@@ -173,6 +178,85 @@ export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
       <p class="section-hint">Open PR volume and age mix per repository. Bar length is total open PRs; segments are age buckets. Hover segments for counts.</p>
       <ul class="legend">${legend}</ul>
       <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Open PR age distribution by repository")}</div>
+    </section>`;
+}
+
+/**
+ * Stacked ready-for-review-to-assignment buckets by repository. Completed bars
+ * show elapsed time; PRs still waiting for assignment are counted separately.
+ */
+export function renderRepoReadyToAssignmentDistribution(
+  observations: ReadyForReviewAssignment[],
+): string {
+  const byRepo = new Map<string, { completed: number[]; pending: number }>();
+  for (const observation of observations) {
+    const state = byRepo.get(observation.repo) ?? { completed: [], pending: 0 };
+    if (observation.latencyHours !== undefined && !observation.outstanding) {
+      state.completed.push(observation.latencyHours / 24);
+    } else if (observation.outstanding) {
+      state.pending++;
+    }
+    byRepo.set(observation.repo, state);
+  }
+
+  if (byRepo.size === 0) {
+    return `<section><h2>Ready for review to reviewer assignment</h2><p class="empty">No PRs with a known ready-for-review transition.</p></section>`;
+  }
+
+  const rows = [...byRepo.entries()]
+    .map(([repo, state]) => ({ repo, ...state }))
+    .sort(
+      (a, b) =>
+        b.completed.length + b.pending - (a.completed.length + a.pending) ||
+        a.repo.localeCompare(b.repo),
+    );
+  const maxCompleted = Math.max(...rows.map((row) => row.completed.length), 1);
+  const W = 820;
+  const labelW = 220;
+  const plotW = 470;
+  const totalW = 120;
+  const padT = 10;
+  const padB = 12;
+  const rowH = 34;
+  const barH = 18;
+  const H = padT + rows.length * rowH + padB;
+
+  const body = rows.map(({ repo, completed, pending }, rowIndex) => {
+    const y = padT + rowIndex * rowH + (rowH - barH) / 2;
+    const counts = AGE_BUCKET_LABELS.map(() => 0);
+    for (const days of completed) {
+      const edgeIndex = AGE_BUCKET_EDGES.findIndex((edge, i) => i > 0 && days < edge);
+      const bucketIndex = edgeIndex >= 0 ? edgeIndex - 1 : counts.length - 1;
+      counts[bucketIndex]! += 1;
+    }
+
+    let x = labelW;
+    const segments = counts.map((count, bucketIndex) => {
+      if (count === 0) return "";
+      const width = (count / maxCompleted) * plotW;
+      const segment = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(width)}" height="${barH}" fill="${AGE_BUCKET_COLORS[bucketIndex]}" fill-opacity="0.82" rx="2"><title>${escapeHtml(repo)} — ${AGE_BUCKET_LABELS[bucketIndex]}: ${count} completed PR${count === 1 ? "" : "s"}</title></rect>`;
+      const number = width >= 20
+        ? `<text x="${fmt(x + width / 2)}" y="${fmt(y + barH / 2)}" class="seg-num" text-anchor="middle" dominant-baseline="central">${count}</text>`
+        : "";
+      x += width;
+      return segment + number;
+    }).join("");
+
+    const shortRepo = repo.split("/").pop() ?? repo;
+    const label = `<text x="${labelW - 10}" y="${fmt(y + barH / 2)}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(shortRepo)}<tspan class="svg-count"> (${completed.length} completed, ${pending} pending)</tspan><title>${escapeHtml(repo)}</title></text>`;
+    const total = `<text x="${labelW + plotW + 8}" y="${fmt(y + barH / 2)}" class="svg-count" dominant-baseline="central">${pending > 0 ? `${pending} pending` : `${completed.length} total`}</text>`;
+    return label + segments + total;
+  }).join("");
+
+  const legend = AGE_BUCKET_LABELS.map((label, i) =>
+    `<li><span class="swatch" style="background:${AGE_BUCKET_COLORS[i]}"></span>${label}</li>`,
+  ).join("");
+
+  return `<section>
+      <h2>Ready for review to reviewer assignment</h2>
+      <p class="section-hint">Time from the first explicit ready-for-review transition to the first direct reviewer request, by repository. Completed intervals use the same time buckets as PR age; pending PRs are shown separately.</p>
+      <ul class="legend">${legend}</ul>
+      <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Ready for review to reviewer assignment by repository")}</div>
     </section>`;
 }
 

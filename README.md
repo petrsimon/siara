@@ -80,7 +80,8 @@ The daily repost *is* the notification system — no separate DM/escalation infr
 - **Dashboard artifacts** (also under `data/`, all included in `data.enc`):
   `assignments.open-prs.json` is the latest point-in-time open-PR snapshot used
   for current age/staleness views; `assignments.response-times.json` is the
-  latest GitHub review-request/review/merge timing report; and
+  latest GitHub review-request/review/merge timing report, including
+  ready-for-review-to-assignment observations; and
   `assignments.overrides.jsonl` records observed manual reviewer changes. The
   dashboard's History view combines the assignment log with PRs present in the
   response report but absent from that log (including GitHub review-request rows

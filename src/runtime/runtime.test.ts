@@ -410,6 +410,51 @@ describe("daily live", () => {
     expect(bob?.waitingHours).toBe(hoursBetween(githubRequestedAt, NOW));
   });
 
+  it("reports ready-for-review to first reviewer assignment time per PR", async () => {
+    const readyAt = "2026-08-20T00:00:00.000Z";
+    const github = new MockGitHubAdapter({
+      openPullRequests: {
+        [REPO]: [
+          pullRequest({ number: 70, requestedReviewers: ["bob"] }),
+          pullRequest({ number: 71, requestedReviewers: ["carol"] }),
+        ],
+      },
+      readyForReviewEvents: {
+        [REPO]: [
+          { pr: 70, at: readyAt },
+          { pr: 71, at: readyAt },
+        ],
+      },
+      reviewRequestEvents: {
+        [REPO]: [
+          { pr: 70, login: "bob", at: "2026-08-19T00:00:00.000Z", kind: "requested" },
+          { pr: 70, login: "bob", at: "2026-08-21T12:00:00.000Z", kind: "requested" },
+        ],
+      },
+    });
+
+    await daily(makeDeps(github, store), NOW);
+
+    expect((await store.readResponseReport())?.readyToAssignment).toEqual([
+      {
+        repo: REPO,
+        pr: 70,
+        readyAt,
+        assignedAt: "2026-08-21T12:00:00.000Z",
+        reviewer: "bob",
+        latencyHours: 36,
+        outstanding: false,
+      },
+      {
+        repo: REPO,
+        pr: 71,
+        readyAt,
+        outstanding: true,
+        waitingHours: hoursBetween(readyAt, NOW),
+      },
+    ]);
+  });
+
   it("omits outstanding reviewers GitHub never requested", async () => {
     await store.appendAssignment({
       date: "2026-08-20",

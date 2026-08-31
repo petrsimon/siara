@@ -14,6 +14,7 @@ import type {
   OpenPrSnapshot,
   Override,
   PullRequest,
+  ReadyForReviewAssignment,
   ReviewResponse,
 } from "../types.js";
 import { firstRequestedAt, openRequestStartedAt } from "../adapters/github.js";
@@ -85,6 +86,51 @@ function latestAssignmentsInWindow(
   return map;
 }
 
+function computeReadyToAssignment(
+  repo: string,
+  prNumbers: number[],
+  lifecycle: Awaited<ReturnType<SiaraDeps["github"]["getPullRequestLifecycleEvents"]>>,
+  nowIso: string,
+): ReadyForReviewAssignment[] {
+  const firstReadyAt = new Map<number, string>();
+  for (const event of lifecycle.readyForReview) {
+    const previous = firstReadyAt.get(event.pr);
+    if (previous === undefined || event.at < previous) {
+      firstReadyAt.set(event.pr, event.at);
+    }
+  }
+
+  const rows: ReadyForReviewAssignment[] = [];
+  for (const pr of prNumbers) {
+    const readyAt = firstReadyAt.get(pr);
+    if (readyAt === undefined) continue;
+
+    const request = lifecycle.reviewRequests
+      .filter((event) => event.pr === pr && event.kind === "requested" && event.at >= readyAt)
+      .sort((a, b) => a.at.localeCompare(b.at))[0];
+    if (request === undefined) {
+      rows.push({
+        repo,
+        pr,
+        readyAt,
+        outstanding: true,
+        waitingHours: hoursBetween(readyAt, nowIso),
+      });
+    } else {
+      rows.push({
+        repo,
+        pr,
+        readyAt,
+        assignedAt: request.at,
+        reviewer: request.login,
+        latencyHours: hoursBetween(readyAt, request.at),
+        outstanding: false,
+      });
+    }
+  }
+  return rows;
+}
+
 /**
  * Build the review-latency report. Outstanding waits are measured from the
  * GitHub `review_requested` timestamp for whoever is currently requested on
@@ -95,7 +141,7 @@ async function computeResponses(
   deps: SiaraDeps,
   nowIso: string,
   openPrs: PullRequest[],
-): Promise<ReviewResponse[]> {
+): Promise<{ responses: ReviewResponse[]; readyToAssignment: ReadyForReviewAssignment[] }> {
   const sinceIso = subtractDays(nowIso, deps.teamConfig.syncWindowDays);
   const windowStartDate = sinceIso.slice(0, 10);
   const latest = latestAssignmentsInWindow(
@@ -129,6 +175,7 @@ async function computeResponses(
   const firstReviewAt = new Map<string, string>();
   const openStartsByRepo = new Map<string, Map<string, string>>();
   const firstReqByRepo = new Map<string, Map<string, string>>();
+  const readyToAssignment: ReadyForReviewAssignment[] = [];
   for (const [repo, prNumbers] of prNumbersByRepo) {
     const events = await deps.store.getReviewEvents(repo, prNumbers);
     for (const ev of events) {
@@ -138,9 +185,12 @@ async function computeResponses(
         firstReviewAt.set(key, ev.reviewedAt);
       }
     }
-    const requestEvents = await deps.github.getReviewRequestEvents(repo, prNumbers);
-    openStartsByRepo.set(repo, openRequestStartedAt(requestEvents));
-    firstReqByRepo.set(repo, firstRequestedAt(requestEvents));
+    const lifecycle = await deps.github.getPullRequestLifecycleEvents(repo, prNumbers);
+    openStartsByRepo.set(repo, openRequestStartedAt(lifecycle.reviewRequests));
+    firstReqByRepo.set(repo, firstRequestedAt(lifecycle.reviewRequests));
+    readyToAssignment.push(
+      ...computeReadyToAssignment(repo, prNumbers, lifecycle, nowIso),
+    );
   }
 
   const authorByPr = new Map<string, string>();
@@ -264,7 +314,7 @@ async function computeResponses(
     const author = authorByPr.get(prKey(r.repo, r.pr));
     if (author !== undefined) r.author = author;
   }
-  return responses;
+  return { responses, readyToAssignment };
 }
 
 export async function daily(
@@ -383,7 +433,7 @@ export async function daily(
     if (openPrs.length === 0) {
       continue;
     }
-    const events = await deps.github.getReviewRequestEvents(
+    const lifecycle = await deps.github.getPullRequestLifecycleEvents(
       repo,
       openPrs.map((p) => p.number),
     );
@@ -394,7 +444,7 @@ export async function daily(
         suggestedByPr.set(pr.number, suggested);
       }
     }
-    for (const d of detectDeclines(openPrs, events, suggestedByPr)) {
+    for (const d of detectDeclines(openPrs, lifecycle.reviewRequests, suggestedByPr)) {
       if (!dry) {
         await deps.store.recordDecline({
           repo,
@@ -635,8 +685,12 @@ export async function daily(
     // Review-latency report: outstanding waits from GitHub review-requested
     // time; completed reviews from the in-window assignment log.
     const allOpenPrs = [...openPrsByRepo.values()].flat();
-    const responses = await computeResponses(deps, nowIso, allOpenPrs);
-    await deps.store.writeResponseReport({ takenAt: nowIso, responses });
+    const { responses, readyToAssignment } = await computeResponses(deps, nowIso, allOpenPrs);
+    await deps.store.writeResponseReport({
+      takenAt: nowIso,
+      responses,
+      readyToAssignment,
+    });
   }
 
   if (deps.slack && doPost && pendingForRepost.length > 0) {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution, renderRepoAgeDistribution } from "./charts.js";
-import type { OpenPrSnapshot, ReviewResponse } from "../types.js";
+import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution, renderRepoAgeDistribution, renderRepoReadyToAssignmentDistribution } from "./charts.js";
+import type { OpenPrSnapshot, ReadyForReviewAssignment, ReviewResponse } from "../types.js";
 
 function merged(
   reviewer: string,
@@ -81,6 +81,30 @@ describe("charts", () => {
       expect(html).toContain("1-2w");
       expect(html).toContain("1-2mo");
       expect(html).toContain("Open PR age distribution by repository");
+    });
+  });
+
+  describe("renderRepoReadyToAssignmentDistribution", () => {
+    it("renders completed buckets and pending counts by repository", () => {
+      const observations: ReadyForReviewAssignment[] = [
+        { repo: "org/alpha", pr: 1, readyAt: "2026-08-01T00:00:00.000Z", latencyHours: 12, assignedAt: "2026-08-01T12:00:00.000Z", reviewer: "bob", outstanding: false },
+        { repo: "org/alpha", pr: 2, readyAt: "2026-08-02T00:00:00.000Z", outstanding: true, waitingHours: 48 },
+        { repo: "org/beta", pr: 3, readyAt: "2026-08-01T00:00:00.000Z", latencyHours: 10 * 24, assignedAt: "2026-08-11T00:00:00.000Z", reviewer: "carol", outstanding: false },
+      ];
+      const html = renderRepoReadyToAssignmentDistribution(observations);
+
+      expect(html).toContain("Ready for review to reviewer assignment");
+      expect(html).toContain("alpha");
+      expect(html).toContain("beta");
+      expect(html).toContain("pending");
+      expect(html).toContain("0-1d");
+      expect(html).toContain("1-2w");
+    });
+
+    it("renders an empty state without lifecycle observations", () => {
+      expect(renderRepoReadyToAssignmentDistribution([])).toContain(
+        "No PRs with a known ready-for-review transition",
+      );
     });
   });
 

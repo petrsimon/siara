@@ -15,7 +15,7 @@ import { promisify } from "node:util";
 import type {
   GitHubAdapter,
   MergedPullRequest,
-  ReviewRequestEvent,
+  PullRequestLifecycleEvents,
 } from "./index.js";
 import type {
   PullRequest,
@@ -187,11 +187,11 @@ export class LocalGitGitHubAdapter implements GitHubAdapter {
     return this.base.getOpenReviewLoad(logins);
   }
 
-  getReviewRequestEvents(
+  getPullRequestLifecycleEvents(
     repo: string,
     prNumbers: number[],
-  ): Promise<ReviewRequestEvent[]> {
-    return this.base.getReviewRequestEvents(repo, prNumbers);
+  ): Promise<PullRequestLifecycleEvents> {
+    return this.base.getPullRequestLifecycleEvents(repo, prNumbers);
   }
 
   postComment(repo: string, prNumber: number, body: string): Promise<void> {

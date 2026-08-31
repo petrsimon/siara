@@ -274,11 +274,31 @@ export interface ReviewResponse {
   mergeHours?: number;
 }
 
+/** Time from a PR's first ready-for-review transition to its first reviewer request. */
+export interface ReadyForReviewAssignment {
+  repo: string;
+  pr: number;
+  /** ISO timestamp of the first ReadyForReviewEvent. */
+  readyAt: string;
+  /** First direct reviewer request at or after readyAt, when assigned. */
+  assignedAt?: string;
+  /** Login requested first, when assigned. */
+  reviewer?: string;
+  /** Whole hours from readyAt to assignedAt, when assigned. */
+  latencyHours?: number;
+  /** True when no qualifying reviewer request exists yet. */
+  outstanding: boolean;
+  /** Whole hours from readyAt to the report timestamp, when outstanding. */
+  waitingHours?: number;
+}
+
 /** Review-latency report: point-in-time, overwritten each `daily` run. */
 export interface ResponseTimeReport {
   /** ISO timestamp the report was computed. */
   takenAt: string;
   responses: ReviewResponse[];
+  /** Ready-for-review → first direct reviewer request observations. */
+  readyToAssignment?: ReadyForReviewAssignment[];
 }
 
 /**

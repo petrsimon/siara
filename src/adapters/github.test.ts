@@ -5,6 +5,7 @@ import {
   parsePullRequests,
   parseReviewHistory,
   parseReviewRequestTimeline,
+  parseReadyForReviewTimeline,
   openRequestStartedAt,
   firstRequestedAt,
   parseMergedPullRequests,
@@ -192,6 +193,20 @@ describe("parseReviewRequestTimeline", () => {
       { pr: 7, login: "bob", at: "2026-01-03T00:00:00.000Z", kind: "removed" },
       { pr: 7, login: "carol", at: "2026-01-04T00:00:00.000Z", kind: "requested" },
     ]);
+  });
+});
+
+describe("parseReadyForReviewTimeline", () => {
+  it("keeps ready transitions and ignores unrelated timeline events", () => {
+    expect(parseReadyForReviewTimeline(7, {
+      timelineItems: {
+        nodes: [
+          { __typename: "ReadyForReviewEvent", createdAt: "2026-01-03T00:00:00.000Z" },
+          { __typename: "ReadyForReviewEvent", createdAt: "" },
+          { __typename: "ReviewRequestedEvent", createdAt: "2026-01-04T00:00:00.000Z" },
+        ],
+      },
+    })).toEqual([{ pr: 7, at: "2026-01-03T00:00:00.000Z" }]);
   });
 });
 

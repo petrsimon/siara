@@ -9,6 +9,8 @@ import { promisify } from "node:util";
 import type {
   GitHubAdapter,
   MergedPullRequest,
+  PullRequestLifecycleEvents,
+  ReadyForReviewEvent,
   ReviewRequestEvent,
 } from "./index.js";
 import type {
@@ -251,6 +253,25 @@ export function parseReviewRequestTimeline(
       continue;
     }
     out.push({ pr, login, at, kind });
+  }
+  return out;
+}
+
+/** Map a GitHub timeline payload to ready-for-review transitions. */
+export function parseReadyForReviewTimeline(
+  pr: number,
+  payload: unknown,
+): ReadyForReviewEvent[] {
+  if (!payload || typeof payload !== "object") return [];
+  const nodes = (payload as GqlPullRequestTimeline).timelineItems?.nodes;
+  if (!Array.isArray(nodes)) return [];
+
+  const out: ReadyForReviewEvent[] = [];
+  for (const node of nodes) {
+    if (!node || typeof node !== "object") continue;
+    if (node.__typename !== "ReadyForReviewEvent") continue;
+    if (typeof node.createdAt !== "string" || node.createdAt.length === 0) continue;
+    out.push({ pr, at: node.createdAt });
   }
   return out;
 }
@@ -552,20 +573,25 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
     return result;
   }
 
-  async getReviewRequestEvents(
+  async getPullRequestLifecycleEvents(
     repo: string,
     prNumbers: number[],
-  ): Promise<ReviewRequestEvent[]> {
+  ): Promise<PullRequestLifecycleEvents> {
     const slash = repo.indexOf("/");
-    if (slash <= 0 || prNumbers.length === 0) return [];
+    if (slash <= 0 || prNumbers.length === 0) {
+      return { reviewRequests: [], readyForReview: [] };
+    }
     const owner = repo.slice(0, slash);
     const name = repo.slice(slash + 1);
     const unique = [...new Set(prNumbers)].filter((n) => Number.isInteger(n) && n > 0);
-    if (unique.length === 0) return [];
+    if (unique.length === 0) {
+      return { reviewRequests: [], readyForReview: [] };
+    }
 
-    const out: ReviewRequestEvent[] = [];
+    const reviewRequests: ReviewRequestEvent[] = [];
+    const readyForReview: ReadyForReviewEvent[] = [];
     const fragment = `
-            timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT], first: 100) {
+            timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, READY_FOR_REVIEW_EVENT], first: 100) {
               nodes {
                 __typename
                 ... on ReviewRequestedEvent {
@@ -575,6 +601,9 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
                 ... on ReviewRequestRemovedEvent {
                   createdAt
                   requestedReviewer { __typename ... on User { login } }
+                }
+                ... on ReadyForReviewEvent {
+                  createdAt
                 }
               }
             }`;
@@ -597,13 +626,14 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
           if (pr === undefined) continue;
           const payload = repoPayload[`p${j}`];
           if (!payload) continue;
-          out.push(...parseReviewRequestTimeline(pr, payload));
+          reviewRequests.push(...parseReviewRequestTimeline(pr, payload));
+          readyForReview.push(...parseReadyForReviewTimeline(pr, payload));
         }
       } catch {
         // Skip a failed batch rather than aborting the whole report.
       }
     }
-    return out;
+    return { reviewRequests, readyForReview };
   }
 
   async postComment(
