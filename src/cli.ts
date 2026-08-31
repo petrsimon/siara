@@ -29,7 +29,7 @@ Usage:
   siara daily [--no-sync] [--no-post]   Assign reviewers for pending PRs
   siara shadow [--no-sync]    Compute + log recommendations; post nothing (shadow mode)
   siara dry-run [--no-sync]   Score pending PRs without side effects
-  siara backfill          Score all current open PRs to populate difficulty bands
+  siara backfill          Score open + historical merged PRs for difficulty bands
   siara dashboard [--out <file>]   Generate HTML dashboard (default: ./dashboard.html)
   siara admin [--port <n>]    Local editable reviewer admin page (default: 4319)
   siara --help            Show this help
@@ -337,10 +337,12 @@ async function main(): Promise<void> {
       }
       case "backfill": {
         const { backfill } = await import("./runtime/backfill.js");
-        console.log("Scoring all current open PRs...");
+        console.log("Scoring open PRs and historical merged PRs...");
         const result = await backfill(deps, nowIso);
-        console.log(`Backfill complete: ${result.scored} PRs scored, ${result.alreadyScored} already had difficulty bands`);
-        console.log(`Total open PRs: ${result.totalPrs}`);
+        console.log(
+          `Backfill complete: open ${result.open.scored}/${result.open.total} scored (${result.open.skipped} skipped, ${result.open.failed} failed), ` +
+            `historical ${result.historical.scored}/${result.historical.total} scored (${result.historical.skipped} skipped, ${result.historical.failed} failed)`,
+        );
         break;
       }
       default:

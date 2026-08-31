@@ -110,7 +110,7 @@ node dist/cli.js sync        # fetch GitHub/Jira signals into ./siara.db
 node dist/cli.js dry-run     # score pending PRs, no side effects (start here)
 node dist/cli.js shadow      # compute + log recommendations, post nothing
 node dist/cli.js daily       # assign + comment + request review + log
-node dist/cli.js backfill    # score current open PRs to populate difficulty bands
+node dist/cli.js backfill    # score open + historical merged PRs for difficulty bands
 node dist/cli.js admin       # run the local reviewer-admin page (port 4319)
 node dist/cli.js dashboard   # write ./dashboard.html from the dashboard artifacts
 ```

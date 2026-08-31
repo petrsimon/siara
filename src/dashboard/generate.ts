@@ -3,6 +3,7 @@ import type { DashboardInput, DashboardMetrics, StrategyComparison, StrategyComp
 import type { StrategyName } from "../scoring/pickReviewers.js";
 import { DEFAULT_TEAM_CONFIG } from "../config.js";
 import { buildMetrics, buildReviewAgePoints, historyAssignments } from "./metrics.js";
+import { isHistoricalDifficultyAssignment } from "../assignments.js";
 import { escapeHtml } from "./html.js";
 import {
   renderAgeDistribution,
@@ -39,7 +40,10 @@ function personCell(login: string, dir: Directory): string {
 
 export function renderDashboardHtml(input: DashboardInput): string {
   const overrides = input.overrides ?? [];
-  const metrics = buildMetrics(input.assignments, overrides);
+  const operationalAssignments = input.assignments.filter(
+    (assignment) => !isHistoricalDifficultyAssignment(assignment),
+  );
+  const metrics = buildMetrics(operationalAssignments, overrides);
   const historyMetrics = buildMetrics(
     historyAssignments(input.assignments, input.responseTimes?.responses ?? []),
     overrides,
@@ -49,7 +53,7 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const staleness = input.staleness ?? { warningDays: 3, overdueDays: 5 };
   const difficultyChart = renderDifficultyDonut(metrics);
   const trendChart = renderTrendChart(metrics);
-  const heatmap = renderHeatmap(input.assignments, dir);
+  const heatmap = renderHeatmap(operationalAssignments, dir);
   const sankeySection = renderSankey(metrics, dir);
   const openPrs = input.openPrs?.prs ?? [];
   const reviewAges = buildReviewAgePoints(

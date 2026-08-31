@@ -300,6 +300,23 @@ describe("generateDashboard", () => {
     expect(html).toContain("carol");
   });
 
+  it("does not count historical difficulty records as Siara assignments", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "simple", pr: 1 }),
+        assignment({
+          assignees: ["bob"],
+          band: "hard",
+          pr: 2,
+          origin: "historical-difficulty-backfill",
+        }),
+      ],
+      generatedAtIso,
+    });
+
+    expect(html).toContain('<div class="kpi-value">1</div>');
+  });
+
   it("includes the injected generatedAtIso timestamp", () => {
     const html = generateDashboard({
       assignments: [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],

@@ -4,6 +4,7 @@
  * completed PRs dropped. Honors DailyOptions.dryRun (no side effects).
  */
 import { resolveConfig } from "../config.js";
+import { isHistoricalDifficultyAssignment } from "../assignments.js";
 import { ownersForPaths } from "../scoring/codeowners.js";
 import { pickReviewers } from "../scoring/pickReviewers.js";
 import { scoreDifficulty } from "../scoring/difficulty.js";
@@ -140,7 +141,9 @@ async function computeResponses(
   const sinceIso = subtractDays(nowIso, deps.teamConfig.syncWindowDays);
   const windowStartDate = sinceIso.slice(0, 10);
   const latest = latestAssignmentsInWindow(
-    await deps.store.readAssignments(),
+    (await deps.store.readAssignments()).filter(
+      (assignment) => !isHistoricalDifficultyAssignment(assignment),
+    ),
     windowStartDate,
   );
 
@@ -346,12 +349,15 @@ export async function daily(
   // Manual-override tracking: what Siara last suggested per PR, and the last
   // divergence we already logged (so we don't re-log the same change daily).
   const priorAssignments = await deps.store.readAssignments();
-  const suggestions = latestSuggestions(priorAssignments);
+  const operationalAssignments = priorAssignments.filter(
+    (assignment) => !isHistoricalDifficultyAssignment(assignment),
+  );
+  const suggestions = latestSuggestions(operationalAssignments);
   // Genuine Siara picks only — [AUTO-SCORED] rows carry the PR's *manual*
   // reviewers, so they must not count as Siara suggestions when deciding
   // whether a removed reviewer is a decline.
   const genuineSuggestions = latestSuggestions(
-    priorAssignments.filter((a) => !a.rationale.startsWith("[AUTO-SCORED]")),
+    operationalAssignments.filter((a) => !a.rationale.startsWith("[AUTO-SCORED]")),
   );
   const bands = latestBands(priorAssignments);
   const loggedOverrideActuals = latestOverrideActuals(

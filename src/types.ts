@@ -214,6 +214,8 @@ export interface Assignment {
   rationale: string;
   /** Ranked candidate list "login:score", best first. */
   candidates: string[];
+  /** Identifies records written only to enrich historical dashboard data. */
+  origin?: "historical-difficulty-backfill";
 }
 
 /**
