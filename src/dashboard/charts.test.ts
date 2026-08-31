@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { renderAgeDistribution, renderAuthorReviewerMergeMatrix, renderDifficultyAgeScatter, renderMergeTimeDistribution, renderRepoAgeDistribution, renderRepoOpenedToAssignmentDistribution } from "./charts.js";
-import type { OpenPrSnapshot, OpenedToAssignment, ReviewResponse } from "../types.js";
+import type { OpenedToAssignment, ReviewAgePoint, ReviewResponse } from "../types.js";
 
 function merged(
   reviewer: string,
@@ -24,20 +24,20 @@ describe("charts", () => {
   describe("renderAgeDistribution", () => {
     it("should render empty state when no PRs", () => {
       const html = renderAgeDistribution([]);
-      expect(html).toContain("No open PRs with known age");
+      expect(html).toContain("No review assignments with known lifecycle age");
     });
 
     it("should render histogram with quartile markers", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/repo", pr: 1, title: "PR 1", author: "alice", assignees: [], ageDays: 1, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 2, title: "PR 2", author: "bob", assignees: [], ageDays: 3, band: "moderate", staleness: "normal" },
-        { repo: "org/repo", pr: 3, title: "PR 3", author: "carol", assignees: [], ageDays: 5, band: "hard", staleness: "warning" },
-        { repo: "org/repo", pr: 4, title: "PR 4", author: "dave", assignees: [], ageDays: 7, band: "simple", staleness: "overdue" },
-        { repo: "org/repo", pr: 5, title: "PR 5", author: "eve", assignees: [], ageDays: 10, band: "moderate", staleness: "overdue" },
+      const points: ReviewAgePoint[] = [
+        { repo: "org/repo", pr: 1, ageDays: 1, band: "simple", status: "open" },
+        { repo: "org/repo", pr: 2, ageDays: 3, band: "moderate", status: "open" },
+        { repo: "org/repo", pr: 3, ageDays: 5, band: "hard", status: "merged" },
+        { repo: "org/repo", pr: 4, ageDays: 7, band: "simple", status: "merged" },
+        { repo: "org/repo", pr: 5, ageDays: 10, band: "moderate", status: "merged" },
       ];
-      const html = renderAgeDistribution(prs);
+      const html = renderAgeDistribution(points);
       
-      expect(html).toContain("PR age distribution");
+      expect(html).toContain("Review age distribution");
       expect(html).toContain("All data");
       expect(html).toContain("Filtered");
       expect(html).toContain("Median");
@@ -45,14 +45,14 @@ describe("charts", () => {
     });
 
     it("should detect and report outliers", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/repo", pr: 1, title: "PR 1", author: "alice", assignees: [], ageDays: 1, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 2, title: "PR 2", author: "bob", assignees: [], ageDays: 2, band: "moderate", staleness: "normal" },
-        { repo: "org/repo", pr: 3, title: "PR 3", author: "carol", assignees: [], ageDays: 3, band: "hard", staleness: "normal" },
-        { repo: "org/repo", pr: 4, title: "PR 4", author: "dave", assignees: [], ageDays: 4, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 5, title: "PR 5", author: "eve", assignees: [], ageDays: 100, band: "simple", staleness: "overdue" }, // extreme outlier
+      const points: ReviewAgePoint[] = [
+        { repo: "org/repo", pr: 1, ageDays: 1, band: "simple", status: "open" },
+        { repo: "org/repo", pr: 2, ageDays: 2, band: "moderate", status: "open" },
+        { repo: "org/repo", pr: 3, ageDays: 3, band: "hard", status: "open" },
+        { repo: "org/repo", pr: 4, ageDays: 4, band: "simple", status: "merged" },
+        { repo: "org/repo", pr: 5, ageDays: 100, band: "simple", status: "merged" }, // extreme outlier
       ];
-      const html = renderAgeDistribution(prs);
+      const html = renderAgeDistribution(points);
       
       expect(html).toMatch(/\d+ outliers? detected/);
       expect(html).toContain("100d");
@@ -62,26 +62,25 @@ describe("charts", () => {
   describe("renderRepoAgeDistribution", () => {
     it("should render empty state when no PRs have known age", () => {
       const html = renderRepoAgeDistribution([]);
-      expect(html).toContain("No open PRs with known age by repository");
+      expect(html).toContain("No review assignments with known lifecycle age by repository");
     });
 
     it("should render stacked age buckets grouped by repository", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/alpha", pr: 1, title: "PR 1", author: "alice", assignees: [], ageDays: 1, staleness: "normal" },
-        { repo: "org/alpha", pr: 2, title: "PR 2", author: "bob", assignees: [], ageDays: 10, staleness: "warning" },
-        { repo: "org/beta", pr: 3, title: "PR 3", author: "carol", assignees: [], ageDays: 45, staleness: "overdue" },
-        { repo: "org/beta", pr: 4, title: "PR 4", author: "dave", assignees: [], ageDays: undefined, staleness: "normal" },
+      const points: ReviewAgePoint[] = [
+        { repo: "org/alpha", pr: 1, ageDays: 1, status: "open" },
+        { repo: "org/alpha", pr: 2, ageDays: 10, status: "merged" },
+        { repo: "org/beta", pr: 3, ageDays: 45, status: "merged" },
       ];
-      const html = renderRepoAgeDistribution(prs);
+      const html = renderRepoAgeDistribution(points);
 
-      expect(html).toContain("PR age by repository");
+      expect(html).toContain("Review age by repository");
       expect(html).toContain("alpha");
       expect(html).toContain("beta");
       expect(html).toContain("0-1d");
       expect(html).toContain("1-2w");
       expect(html).toContain("1-2mo");
-      expect(html).toContain("Open PR age distribution by repository");
-      expect(html).toContain("Age is measured from the PR opened timestamp");
+      expect(html).toContain("Review age distribution by repository");
+      expect(html).toContain("Age is measured from the first reviewer assignment/request");
     });
   });
 
@@ -125,20 +124,20 @@ describe("charts", () => {
   describe("renderDifficultyAgeScatter", () => {
     it("should render empty state when no PRs", () => {
       const html = renderDifficultyAgeScatter([]);
-      expect(html).toContain("No open PRs with difficulty and age data");
+      expect(html).toContain("No review assignments with difficulty and lifecycle-age data");
     });
 
     it("should render scatter plot with band-based positioning", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/repo", pr: 1, title: "PR 1", author: "alice", assignees: [], ageDays: 1, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 2, title: "PR 2", author: "bob", assignees: [], ageDays: 5, band: "moderate", staleness: "warning" },
-        { repo: "org/repo", pr: 3, title: "PR 3", author: "carol", assignees: [], ageDays: 10, band: "hard", staleness: "overdue" },
+      const points: ReviewAgePoint[] = [
+        { repo: "org/repo", pr: 1, ageDays: 1, band: "simple", status: "open" },
+        { repo: "org/repo", pr: 2, ageDays: 5, band: "moderate", status: "merged" },
+        { repo: "org/repo", pr: 3, ageDays: 10, band: "hard", status: "merged" },
       ];
-      const html = renderDifficultyAgeScatter(prs);
+      const html = renderDifficultyAgeScatter(points);
       
-      expect(html).toContain("Difficulty × age");
+      expect(html).toContain("Difficulty × review age");
       expect(html).toContain("Difficulty band");
-      expect(html).toContain("Age (days)");
+      expect(html).toContain("Review age (days)");
       expect(html).toContain("Simple");
       expect(html).toContain("Moderate");
       expect(html).toContain("Hard");
@@ -146,12 +145,12 @@ describe("charts", () => {
     });
 
     it("should skip PRs without age or band", () => {
-      const prs: OpenPrSnapshot[] = [
-        { repo: "org/repo", pr: 1, title: "PR 1", author: "alice", assignees: [], ageDays: undefined, band: "simple", staleness: "normal" },
-        { repo: "org/repo", pr: 2, title: "PR 2", author: "bob", assignees: [], ageDays: 5, band: undefined, staleness: "normal" },
-        { repo: "org/repo", pr: 3, title: "PR 3", author: "carol", assignees: [], ageDays: 10, band: "hard", staleness: "overdue" },
+      const points: ReviewAgePoint[] = [
+        { repo: "org/repo", pr: 1, ageDays: 1, status: "open" },
+        { repo: "org/repo", pr: 2, ageDays: 5, status: "merged" },
+        { repo: "org/repo", pr: 3, ageDays: 10, band: "hard", status: "merged" },
       ];
-      const html = renderDifficultyAgeScatter(prs);
+      const html = renderDifficultyAgeScatter(points);
       
       // Should only render 1 point (PR 3)
       expect(html).toContain("circle");

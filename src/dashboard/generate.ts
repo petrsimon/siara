@@ -2,7 +2,7 @@ import type { Assignment, DifficultyBand, OpenPrSnapshot } from "../types.js";
 import type { DashboardInput, DashboardMetrics, StrategyComparison, StrategyComparisonMetrics } from "./index.js";
 import type { StrategyName } from "../scoring/pickReviewers.js";
 import { DEFAULT_TEAM_CONFIG } from "../config.js";
-import { buildMetrics, historyAssignments } from "./metrics.js";
+import { buildMetrics, buildReviewAgePoints, historyAssignments } from "./metrics.js";
 import { escapeHtml } from "./html.js";
 import {
   renderAgeDistribution,
@@ -52,17 +52,22 @@ export function renderDashboardHtml(input: DashboardInput): string {
   const heatmap = renderHeatmap(input.assignments, dir);
   const sankeySection = renderSankey(metrics, dir);
   const openPrs = input.openPrs?.prs ?? [];
+  const reviewAges = buildReviewAgePoints(
+    openPrs,
+    input.responseTimes,
+    input.assignments,
+  );
   const openPrsSection = renderOpenPrsSection(input.openPrs, dir, staleness);
   const overridesSection = renderOverridesSection(input, overrides);
   const algorithmSection = renderAlgorithmSection(
     input.algorithm,
   );
-  const ageDistSection = renderAgeDistribution(openPrs);
-  const repoAgeSection = renderRepoAgeDistribution(openPrs);
+  const ageDistSection = renderAgeDistribution(reviewAges);
+  const repoAgeSection = renderRepoAgeDistribution(reviewAges);
   const openedToAssignmentSection = renderRepoOpenedToAssignmentDistribution(
     input.responseTimes?.openedToAssignment ?? [],
   );
-  const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
+  const diffAgeScatter = renderDifficultyAgeScatter(reviewAges);
   const assignmentsSection = renderAssignmentsSection(openPrs, historyMetrics, dir);
 
   const generatedAt = escapeHtml(input.generatedAtIso);

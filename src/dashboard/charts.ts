@@ -7,6 +7,7 @@ import type {
   DifficultyBand,
   OpenPrSnapshot,
   OpenedToAssignment,
+  ReviewAgePoint,
   ReviewResponse,
 } from "../types.js";
 import { escapeHtml } from "./html.js";
@@ -86,13 +87,11 @@ function quartiles(data: number[]): Quartiles {
  * Age distribution histogram with IQR-based outlier detection.
  * Returns both full-data and filtered views as HTML sections.
  */
-export function renderAgeDistribution(openPrs: OpenPrSnapshot[]): string {
-  const ages = openPrs
-    .filter(pr => pr.ageDays !== undefined)
-    .map(pr => pr.ageDays!);
+export function renderAgeDistribution(points: ReviewAgePoint[]): string {
+  const ages = points.map((point) => point.ageDays);
   
   if (ages.length === 0) {
-    return `<section><h2>PR age distribution</h2><p class="empty">No open PRs with known age.</p></section>`;
+    return `<section><h2>Review age distribution</h2><p class="empty">No review assignments with known lifecycle age.</p></section>`;
   }
   
   const stats = quartiles(ages);
@@ -110,8 +109,8 @@ export function renderAgeDistribution(openPrs: OpenPrSnapshot[]): string {
     : `<p class="section-hint">No outliers detected.</p>`;
   
   return `<section>
-      <h2>PR age distribution</h2>
-      <p class="section-hint">How long open PRs have been waiting since they were opened, bucketed by industry-standard time ranges (same-day, 1-3d, 1-2w, etc.). This is PR age, not time since reviewer assignment. Quartiles and IQR-based outlier detection (1.5×IQR rule).</p>
+      <h2>Review age distribution</h2>
+      <p class="section-hint">How long PRs spend in review, from the first reviewer assignment/request until merge (or the latest report time for open PRs), bucketed by industry-standard time ranges. Quartiles and IQR-based outlier detection (1.5×IQR rule).</p>
       ${outlierNote}
       <div class="grid-2">
         <div>
@@ -127,20 +126,19 @@ export function renderAgeDistribution(openPrs: OpenPrSnapshot[]): string {
 }
 
 /**
- * Stacked age buckets by repository. Bar length shows total open PR volume;
- * segment colors show how old each repository's open PRs are.
+ * Stacked review-lifecycle age buckets by repository. Bar length shows total
+ * PR volume; segment colors show how long each PR has spent in review.
  */
-export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
+export function renderRepoAgeDistribution(points: ReviewAgePoint[]): string {
   const byRepo = new Map<string, number[]>();
-  for (const pr of openPrs) {
-    if (pr.ageDays === undefined) continue;
-    const ages = byRepo.get(pr.repo) ?? [];
-    ages.push(pr.ageDays);
-    byRepo.set(pr.repo, ages);
+  for (const point of points) {
+    const ages = byRepo.get(point.repo) ?? [];
+    ages.push(point.ageDays);
+    byRepo.set(point.repo, ages);
   }
 
   if (byRepo.size === 0) {
-    return `<section><h2>PR age by repository</h2><p class="empty">No open PRs with known age by repository.</p></section>`;
+    return `<section><h2>Review age by repository</h2><p class="empty">No review assignments with known lifecycle age by repository.</p></section>`;
   }
 
   const rows = [...byRepo.entries()]
@@ -192,7 +190,7 @@ export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
     }).join("");
 
     const shortRepo = repo.split("/").pop() ?? repo;
-    const label = `<text x="${labelW - 10}" y="${fmt(y + barH / 2)}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(shortRepo)}<tspan class="svg-count"> (${ages.length})</tspan><title>${escapeHtml(repo)} — ${ages.length} open PR${ages.length === 1 ? "" : "s"}</title></text>`;
+    const label = `<text x="${labelW - 10}" y="${fmt(y + barH / 2)}" class="svg-label" text-anchor="end" dominant-baseline="central">${escapeHtml(shortRepo)}<tspan class="svg-count"> (${ages.length})</tspan><title>${escapeHtml(repo)} — ${ages.length} PR${ages.length === 1 ? "" : "s"} in review-age data</title></text>`;
     const total = `<text x="${labelW + plotW + 8}" y="${fmt(y + barH / 2)}" class="svg-count" dominant-baseline="central">${ages.length} total</text>`;
     return label + segments + total;
   }).join("");
@@ -202,10 +200,10 @@ export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
   ).join("");
 
   return `<section>
-      <h2>PR age by repository</h2>
-      <p class="section-hint">Open PR volume and age mix per repository. Age is measured from the PR opened timestamp to this snapshot; it is not time since reviewer assignment. Bar length is total open PRs; segments are age buckets (small nonzero buckets use a minimum display width). Hover segments for counts.</p>
+      <h2>Review age by repository</h2>
+      <p class="section-hint">PR volume and review-age mix per repository. Age is measured from the first reviewer assignment/request until merge, or until the report time for open PRs. Bar length is total PRs with known lifecycle age; segments are age buckets (small nonzero buckets use a minimum display width). Hover segments for counts.</p>
       <ul class="legend">${legend}</ul>
-      <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Open PR age distribution by repository")}</div>
+      <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Review age distribution by repository")}</div>
     </section>`;
 }
 
@@ -430,18 +428,18 @@ function renderHistogram(
 }
 
 /**
- * Difficulty × age scatter plot.
- * Since OpenPrSnapshot doesn't have difficulty scores, we map bands to representative values.
- * X-axis: band (mapped to 0.15/0.45/0.75), Y-axis: age in days, colored by band.
+ * Difficulty × review-age scatter plot.
+ * Since review-age points don't carry continuous difficulty scores, we map
+ * bands to representative values. X-axis: band (mapped to 0.15/0.45/0.75),
+ * Y-axis: review age in days, colored by band.
  */
-export function renderDifficultyAgeScatter(openPrs: OpenPrSnapshot[]): string {
-  const points = openPrs.filter(pr => 
-    pr.ageDays !== undefined && 
-    pr.band !== undefined
+export function renderDifficultyAgeScatter(points: ReviewAgePoint[]): string {
+  const agedPoints = points.filter(
+    (point): point is ReviewAgePoint & { band: DifficultyBand } => point.band !== undefined,
   );
-  
-  if (points.length === 0) {
-    return `<section><h2>Difficulty × age</h2><p class="empty">No open PRs with difficulty and age data.</p></section>`;
+
+  if (agedPoints.length === 0) {
+    return `<section><h2>Difficulty × review age</h2><p class="empty">No review assignments with difficulty and lifecycle-age data.</p></section>`;
   }
   
   const W = 640;
@@ -460,25 +458,25 @@ export function renderDifficultyAgeScatter(openPrs: OpenPrSnapshot[]): string {
     hard: 0.75,
   };
   
-  const minAge = Math.min(...points.map(p => p.ageDays!));
-  const maxAge = Math.max(...points.map(p => p.ageDays!));
+  const minAge = Math.min(...agedPoints.map((point) => point.ageDays));
+  const maxAge = Math.max(...agedPoints.map((point) => point.ageDays));
   
   const ageRange = maxAge - minAge || 1;
   
   // Draw points with jitter to prevent exact overlap
-  const circles = points.map(pr => {
-    const baseDiff = bandToDiff[pr.band!];
+  const circles = agedPoints.map((pr) => {
+    const baseDiff = bandToDiff[pr.band];
     // Add small random jitter within band range (±0.08)
     const jitter = (Math.random() - 0.5) * 0.16;
     const diffValue = Math.max(0, Math.min(1, baseDiff + jitter));
     
     const x = padL + diffValue * plotW;
-    const y = padT + plotH - ((pr.ageDays! - minAge) / ageRange) * plotH;
+    const y = padT + plotH - ((pr.ageDays - minAge) / ageRange) * plotH;
     const color = `var(--band-${pr.band})`;
     
     return `<circle cx="${fmt(x)}" cy="${fmt(y)}" r="4" fill="${color}" fill-opacity="0.7" stroke="#fff" stroke-width="0.5"><title>${escapeHtml(pr.repo)}#${pr.pr}
-Band: ${BAND_LABEL[pr.band!]}
-Age: ${pr.ageDays}d</title></circle>`;
+Band: ${BAND_LABEL[pr.band]}
+Review age: ${fmtDays(pr.ageDays)}d (${pr.status === "merged" ? "merged" : "open at report time"})</title></circle>`;
   }).join("");
   
   // X-axis ticks (bands)
@@ -505,7 +503,7 @@ Age: ${pr.ageDays}d</title></circle>`;
     <line x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" stroke="var(--border)" stroke-width="1"/>
     <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="var(--border)" stroke-width="1"/>
     <text x="${padL + plotW / 2}" y="${H - 5}" class="svg-tick" text-anchor="middle">Difficulty band</text>
-    <text x="${25}" y="${padT + plotH / 2}" class="svg-tick" text-anchor="middle" transform="rotate(-90 25 ${padT + plotH / 2})">Age (days)</text>
+    <text x="${25}" y="${padT + plotH / 2}" class="svg-tick" text-anchor="middle" transform="rotate(-90 25 ${padT + plotH / 2})">Review age (days)</text>
   `;
   
   // Legend
@@ -522,9 +520,9 @@ Age: ${pr.ageDays}d</title></circle>`;
   `;
   
   return `<section>
-      <h2>Difficulty × age</h2>
-      <p class="section-hint">Do harder PRs sit longer? Each point is an open PR. Position shows difficulty band (X, with jitter to prevent overlap) and age (Y).</p>
-      ${svg(W, H, axes + circles + xTicks + yTicks + legend, "Difficulty vs age scatter plot")}
+      <h2>Difficulty × review age</h2>
+      <p class="section-hint">Do harder PRs spend longer in review? Each point is a PR from the lifecycle report. Position shows difficulty band (X, with jitter to prevent overlap) and review age (Y).</p>
+      ${svg(W, H, axes + circles + xTicks + yTicks + legend, "Difficulty vs review age scatter plot")}
     </section>`;
 }
 

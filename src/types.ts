@@ -228,13 +228,13 @@ export interface OpenPrSnapshot {
   author: string;
   /** Reviewers currently requested (or freshly assigned this run). */
   assignees: string[];
-  /** Age in days since the PR was posted to the Slack workflow, if known. */
+  /** PR age in days from GitHub creation (or Slack posting fallback), if known. */
   ageDays?: number;
   /** Difficulty band, when the PR was scored this run. */
   band?: DifficultyBand;
   /** "normal" | "warning" | "overdue" from the staleness thresholds. */
   staleness: "normal" | "warning" | "overdue";
-  /** ISO timestamp the PR was posted (drives age), if known. */
+  /** ISO timestamp the PR was posted, if known. */
   postedAt?: string;
 }
 
@@ -243,6 +243,19 @@ export interface OpenPrsSnapshot {
   /** ISO timestamp the snapshot was taken. */
   takenAt: string;
   prs: OpenPrSnapshot[];
+}
+
+/**
+ * One PR's review-lifecycle age for dashboard analytics. Completed PRs use
+ * reviewer assignment/request → merge; open PRs use reviewer assignment/request
+ * → report time.
+ */
+export interface ReviewAgePoint {
+  repo: string;
+  pr: number;
+  ageDays: number;
+  band?: DifficultyBand;
+  status?: "open" | "merged";
 }
 
 /**

@@ -79,15 +79,16 @@ The daily repost *is* the notification system — no separate DM/escalation infr
   (`data.enc`) instead — see [Publishing](#publishing-the-dashboard-github-pages).
 - **Dashboard artifacts** (also under `data/`, all included in `data.enc`):
   `assignments.open-prs.json` is the latest point-in-time open-PR snapshot used
-  for current age/staleness views; `assignments.response-times.json` is the
-  latest GitHub review-request/review/merge timing report, including
-  provisional PR-opened-to-assignment observations; ready-for-review timestamps
-  will be collected in a future backfill; and
+  for current PR-age/staleness views; `assignments.response-times.json` is the
+  latest GitHub review-request/review/merge timing report, including review
+  lifecycle age (assignment/request → merge/report) and provisional
+  PR-opened-to-assignment observations; ready-for-review timestamps will be
+  collected in a future backfill; and
   `assignments.overrides.jsonl` records observed manual reviewer changes. The
   dashboard's History view combines the assignment log with PRs present in the
   response report but absent from that log (including GitHub review-request rows
-  for merged PRs). Its age charts describe current open PRs, not historical PR
-  age at merge (historical records do not yet store `createdAt`).
+  for merged PRs). The dashboard distinguishes current PR age from review
+  lifecycle age; historical review age starts at reviewer assignment/request.
 
 ## Status
 

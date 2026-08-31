@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Assignment, Override } from "../types.js";
+import type { Assignment, OpenPrSnapshot, Override, ResponseTimeReport } from "../types.js";
 import { computeMetrics, generateDashboard, historyAssignments } from "./index.js";
+import { buildReviewAgePoints } from "./metrics.js";
 
 function assignment(
   overrides: Partial<Assignment> & Pick<Assignment, "assignees" | "band">,
@@ -194,6 +195,49 @@ describe("computeMetrics", () => {
     ]);
     expect(metrics.weekByPerson.alice).toEqual({ "2026-01-12": 2 });
     expect(metrics.weekByPerson.bob).toEqual({ "2026-01-19": 1 });
+  });
+});
+
+describe("buildReviewAgePoints", () => {
+  it("uses assignment-to-merge for merged PRs and assignment-to-report for open PRs", () => {
+    const openPrs: OpenPrSnapshot[] = [
+      {
+        repo: "org/repo",
+        pr: 1,
+        title: "Open",
+        author: "alice",
+        assignees: ["bob"],
+        ageDays: 100,
+        staleness: "overdue",
+      },
+    ];
+    const report: ResponseTimeReport = {
+      takenAt: "2026-08-31T00:00:00.000Z",
+      responses: [
+        {
+          repo: "org/repo",
+          pr: 1,
+          reviewer: "bob",
+          assignedAt: "2026-08-29T00:00:00.000Z",
+          outstanding: true,
+          waitingHours: 48,
+        },
+        {
+          repo: "org/repo",
+          pr: 2,
+          reviewer: "carol",
+          assignedAt: "2026-08-20T00:00:00.000Z",
+          outstanding: false,
+          mergedAt: "2026-08-25T00:00:00.000Z",
+          mergeHours: 120,
+        },
+      ],
+    };
+
+    expect(buildReviewAgePoints(openPrs, report)).toEqual([
+      { repo: "org/repo", pr: 1, ageDays: 2, status: "open" },
+      { repo: "org/repo", pr: 2, ageDays: 5, status: "merged" },
+    ]);
   });
 });
 
@@ -511,7 +555,7 @@ describe("generateDashboard", () => {
       generatedAtIso,
     });
     expect(html).toContain("Open PRs");
-    expect(html).toContain("PR age by repository");
+    expect(html).toContain("Review age by repository");
     expect(html).toContain("PR opened to reviewer assignment");
     expect(html).toContain("Add auth guard");
     expect(html).toContain("6d");

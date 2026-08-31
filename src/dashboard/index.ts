@@ -23,8 +23,9 @@ export interface DashboardInput {
   /** Latest point-in-time open-PRs snapshot — powers the PR-age overview.
    *  Optional (older logs predate snapshots). */
   openPrs?: OpenPrsSnapshot;
-  /** Latest review-latency report — augments assignment history with merged PRs
-   *  and response metadata. Optional (older logs predate response reports). */
+  /** Latest review-latency report — augments assignment history with merged PRs,
+   *  response metadata, and review-lifecycle age points. Optional (older logs
+   *  predate response reports). */
   responseTimes?: ResponseTimeReport;
   /** Reviewer directory (login → real name / email) for display + tooltips.
    *  Loaded from siara.config.json; absent → logins shown verbatim. */

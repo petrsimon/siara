@@ -1,4 +1,12 @@
-import type { Assignment, DifficultyBand, Override, ReviewResponse } from "../types.js";
+import type {
+  Assignment,
+  DifficultyBand,
+  OpenPrSnapshot,
+  Override,
+  ResponseTimeReport,
+  ReviewAgePoint,
+  ReviewResponse,
+} from "../types.js";
 import type { DashboardMetrics } from "./index.js";
 import { computeGini } from "./gini.js";
 
@@ -46,6 +54,66 @@ export function historyAssignments(
   }
 
   return [...byPr.values()];
+}
+
+/**
+ * Build one review-lifecycle age point per PR. A PR is anchored at its earliest
+ * recorded reviewer request; merged PRs end at merge, while open PRs end at
+ * the response report timestamp. PRs without a known lifecycle endpoint are
+ * omitted rather than falling back to GitHub creation age.
+ */
+export function buildReviewAgePoints(
+  openPrs: OpenPrSnapshot[],
+  report: ResponseTimeReport | undefined,
+  assignments: Assignment[] = [],
+): ReviewAgePoint[] {
+  if (!report) return [];
+
+  const openKeys = new Set(openPrs.map((pr) => prKey(pr.repo, pr.pr)));
+  const bandByKey = new Map<string, DifficultyBand>();
+  for (const pr of openPrs) {
+    if (pr.band) bandByKey.set(prKey(pr.repo, pr.pr), pr.band);
+  }
+  for (const assignment of assignments) {
+    bandByKey.set(prKey(assignment.repo, assignment.pr), assignment.band);
+  }
+
+  const grouped = new Map<string, ReviewResponse[]>();
+  for (const response of report.responses) {
+    const key = prKey(response.repo, response.pr);
+    const rows = grouped.get(key) ?? [];
+    rows.push(response);
+    grouped.set(key, rows);
+  }
+
+  const reportAt = Date.parse(report.takenAt);
+  const out: ReviewAgePoint[] = [];
+  for (const [key, rows] of grouped) {
+    const starts = rows
+      .map((row) => Date.parse(row.assignedAt))
+      .filter((at) => Number.isFinite(at));
+    if (starts.length === 0) continue;
+
+    const start = Math.min(...starts);
+    const isOpen = openKeys.has(key);
+    const mergedEnds = rows
+      .map((row) => (row.mergedAt ? Date.parse(row.mergedAt) : NaN))
+      .filter((at) => Number.isFinite(at));
+    const end = isOpen ? reportAt : (mergedEnds.length > 0 ? Math.min(...mergedEnds) : NaN);
+    if (!Number.isFinite(end) || end < start) continue;
+
+    const [repo, prText] = key.split("#");
+    if (!repo || !prText) continue;
+    out.push({
+      repo,
+      pr: Number(prText),
+      ageDays: (end - start) / (24 * 60 * 60 * 1000),
+      ...(bandByKey.has(key) ? { band: bandByKey.get(key) } : {}),
+      status: isOpen ? "open" : "merged",
+    });
+  }
+
+  return out.sort((a, b) => a.repo.localeCompare(b.repo) || a.pr - b.pr);
 }
 
 export function buildMetrics(
