@@ -105,7 +105,7 @@ export function renderAgeDistribution(points: ReviewAgePoint[]): string {
     : `<p class="empty">All data points are outliers.</p>`;
   
   const outlierNote = outliers.length > 0
-    ? `<p class="section-hint">${outliers.length} outliers detected (outside 1.5×IQR). Outliers: ${outliers.sort((a, b) => b - a).map(a => `${a}d`).join(", ")}</p>`
+    ? `<p class="section-hint">${outliers.length} outliers detected (outside 1.5×IQR). Outliers: ${outliers.sort((a, b) => b - a).map((a) => `${fmtDays(a)}d`).join(", ")}</p>`
     : `<p class="section-hint">No outliers detected.</p>`;
   
   return `<section>

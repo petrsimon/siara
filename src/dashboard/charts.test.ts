@@ -50,12 +50,13 @@ describe("charts", () => {
         { repo: "org/repo", pr: 2, ageDays: 2, band: "moderate", status: "open" },
         { repo: "org/repo", pr: 3, ageDays: 3, band: "hard", status: "open" },
         { repo: "org/repo", pr: 4, ageDays: 4, band: "simple", status: "merged" },
-        { repo: "org/repo", pr: 5, ageDays: 100, band: "simple", status: "merged" }, // extreme outlier
+        { repo: "org/repo", pr: 5, ageDays: 100.25, band: "simple", status: "merged" }, // extreme outlier
       ];
       const html = renderAgeDistribution(points);
       
       expect(html).toMatch(/\d+ outliers? detected/);
-      expect(html).toContain("100d");
+      expect(html).toContain("100.3d");
+      expect(html).not.toContain("100.25d");
     });
   });
 
