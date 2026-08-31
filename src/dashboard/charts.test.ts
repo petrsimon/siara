@@ -81,6 +81,7 @@ describe("charts", () => {
       expect(html).toContain("1-2w");
       expect(html).toContain("1-2mo");
       expect(html).toContain("Open PR age distribution by repository");
+      expect(html).toContain("Age is measured from the PR opened timestamp");
     });
   });
 
@@ -99,6 +100,19 @@ describe("charts", () => {
       expect(html).toContain("pending");
       expect(html).toContain("0-1d");
       expect(html).toContain("1-2w");
+
+      const crowded = renderRepoOpenedToAssignmentDistribution([
+        ...observations,
+        ...Array.from({ length: 30 }, (_, pr) => ({
+          repo: "org/crowded",
+          pr: pr + 10,
+          openedAt: "2026-08-01T00:00:00.000Z",
+          latencyHours: 10 * 24,
+          assignedAt: "2026-08-11T00:00:00.000Z",
+          outstanding: false,
+        })),
+      ]);
+      expect(crowded).toMatch(/class="seg-num"[^>]*>1<\/text>/);
     });
 
     it("renders an empty state without lifecycle observations", () => {

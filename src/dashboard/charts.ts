@@ -20,6 +20,7 @@ const BAND_LABEL: Record<DifficultyBand, string> = {
 const AGE_BUCKET_LABELS = ["0-1d", "1-3d", "3-7d", "1-2w", "2-4w", "1-2mo", "2-3mo", "3mo+"];
 const AGE_BUCKET_EDGES = [0, 1, 3, 7, 14, 30, 60, 90, Infinity];
 const AGE_BUCKET_COLORS = ["#268bd2", "#2aa198", "#859900", "#b58900", "#cb4b16", "#d33682", "#6c71c4", "#dc322f"];
+const MIN_SEGMENT_WIDTH = 22;
 
 /** Wrap chart body in a responsive, accessible SVG. */
 function svg(w: number, h: number, body: string, title: string): string {
@@ -29,6 +30,20 @@ function svg(w: number, h: number, body: string, title: string): string {
 /** Trim float noise from SVG coordinates. */
 function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+/** Reserve enough room for the complete repository label and its summary. */
+function repoLabelWidth(labels: string[], minimum: number): number {
+  const longest = Math.max(...labels.map((label) => label.length), 0);
+  // The labels use a 12px proportional font. This intentionally overestimates
+  // slightly so long labels are not clipped at the left edge of the SVG.
+  return Math.max(minimum, Math.ceil(longest * 7.1 + 20));
+}
+
+/** Keep small nonzero segments wide enough to show their count. */
+function bucketWidths(counts: number[], maxCount: number, nominalPlotW: number): number[] {
+  const scale = nominalPlotW / Math.max(maxCount, 1);
+  return counts.map((count) => (count === 0 ? 0 : Math.max(count * scale, MIN_SEGMENT_WIDTH)));
 }
 
 /** Quartiles and IQR calculation. */
@@ -96,7 +111,7 @@ export function renderAgeDistribution(openPrs: OpenPrSnapshot[]): string {
   
   return `<section>
       <h2>PR age distribution</h2>
-      <p class="section-hint">How long open PRs have been waiting, bucketed by industry-standard time ranges (same-day, 1-3d, 1-2w, etc.). Quartiles and IQR-based outlier detection (1.5×IQR rule).</p>
+      <p class="section-hint">How long open PRs have been waiting since they were opened, bucketed by industry-standard time ranges (same-day, 1-3d, 1-2w, etc.). This is PR age, not time since reviewer assignment. Quartiles and IQR-based outlier detection (1.5×IQR rule).</p>
       ${outlierNote}
       <div class="grid-2">
         <div>
@@ -132,9 +147,21 @@ export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
     .map(([repo, ages]) => ({ repo, ages }))
     .sort((a, b) => b.ages.length - a.ages.length || a.repo.localeCompare(b.repo));
   const maxTotal = Math.max(...rows.map((row) => row.ages.length), 1);
-  const W = 760;
-  const labelW = 190;
-  const plotW = 470;
+  const labelTexts = rows.map(({ repo, ages }) => `${repo.split("/").pop() ?? repo} (${ages.length})`);
+  const labelW = repoLabelWidth(labelTexts, 190);
+  const nominalPlotW = 470;
+  const plotW = Math.max(
+    nominalPlotW,
+    ...rows.map(({ ages }) => {
+      const counts = AGE_BUCKET_LABELS.map(() => 0);
+      for (const age of ages) {
+        const edgeIndex = AGE_BUCKET_EDGES.findIndex((edge, i) => i > 0 && age < edge);
+        const bucketIndex = edgeIndex >= 0 ? edgeIndex - 1 : counts.length - 1;
+        counts[bucketIndex]! += 1;
+      }
+      return bucketWidths(counts, maxTotal, nominalPlotW).reduce((sum, width) => sum + width, 0);
+    }),
+  );
   const totalW = 70;
   const padT = 10;
   const padB = 12;
@@ -152,11 +179,12 @@ export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
     }
 
     let x = labelW;
+    const widths = bucketWidths(counts, maxTotal, nominalPlotW);
     const segments = counts.map((count, bucketIndex) => {
       if (count === 0) return "";
-      const width = (count / maxTotal) * plotW;
+      const width = widths[bucketIndex]!;
       const segment = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(width)}" height="${barH}" fill="${AGE_BUCKET_COLORS[bucketIndex]}" fill-opacity="0.82" rx="2"><title>${escapeHtml(repo)} — ${AGE_BUCKET_LABELS[bucketIndex]}: ${count} PR${count === 1 ? "" : "s"}</title></rect>`;
-      const number = width >= 20
+      const number = width >= MIN_SEGMENT_WIDTH
         ? `<text x="${fmt(x + width / 2)}" y="${fmt(y + barH / 2)}" class="seg-num" text-anchor="middle" dominant-baseline="central">${count}</text>`
         : "";
       x += width;
@@ -175,7 +203,7 @@ export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
 
   return `<section>
       <h2>PR age by repository</h2>
-      <p class="section-hint">Open PR volume and age mix per repository. Bar length is total open PRs; segments are age buckets. Hover segments for counts.</p>
+      <p class="section-hint">Open PR volume and age mix per repository. Age is measured from the PR opened timestamp to this snapshot; it is not time since reviewer assignment. Bar length is total open PRs; segments are age buckets (small nonzero buckets use a minimum display width). Hover segments for counts.</p>
       <ul class="legend">${legend}</ul>
       <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Open PR age distribution by repository")}</div>
     </section>`;
@@ -211,9 +239,21 @@ export function renderRepoOpenedToAssignmentDistribution(
         a.repo.localeCompare(b.repo),
     );
   const maxCompleted = Math.max(...rows.map((row) => row.completed.length), 1);
-  const W = 820;
-  const labelW = 220;
-  const plotW = 470;
+  const labelTexts = rows.map(({ repo, completed, pending }) => `${repo.split("/").pop() ?? repo} (${completed.length} completed, ${pending} pending)`);
+  const labelW = repoLabelWidth(labelTexts, 220);
+  const nominalPlotW = 470;
+  const plotW = Math.max(
+    nominalPlotW,
+    ...rows.map(({ completed }) => {
+      const counts = AGE_BUCKET_LABELS.map(() => 0);
+      for (const days of completed) {
+        const edgeIndex = AGE_BUCKET_EDGES.findIndex((edge, i) => i > 0 && days < edge);
+        const bucketIndex = edgeIndex >= 0 ? edgeIndex - 1 : counts.length - 1;
+        counts[bucketIndex]! += 1;
+      }
+      return bucketWidths(counts, maxCompleted, nominalPlotW).reduce((sum, width) => sum + width, 0);
+    }),
+  );
   const totalW = 120;
   const padT = 10;
   const padB = 12;
@@ -231,11 +271,12 @@ export function renderRepoOpenedToAssignmentDistribution(
     }
 
     let x = labelW;
+    const widths = bucketWidths(counts, maxCompleted, nominalPlotW);
     const segments = counts.map((count, bucketIndex) => {
       if (count === 0) return "";
-      const width = (count / maxCompleted) * plotW;
+      const width = widths[bucketIndex]!;
       const segment = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(width)}" height="${barH}" fill="${AGE_BUCKET_COLORS[bucketIndex]}" fill-opacity="0.82" rx="2"><title>${escapeHtml(repo)} — ${AGE_BUCKET_LABELS[bucketIndex]}: ${count} completed PR${count === 1 ? "" : "s"}</title></rect>`;
-      const number = width >= 20
+      const number = width >= MIN_SEGMENT_WIDTH
         ? `<text x="${fmt(x + width / 2)}" y="${fmt(y + barH / 2)}" class="seg-num" text-anchor="middle" dominant-baseline="central">${count}</text>`
         : "";
       x += width;
@@ -254,7 +295,7 @@ export function renderRepoOpenedToAssignmentDistribution(
 
   return `<section>
       <h2>PR opened to reviewer assignment <span class="provisional">(provisional)</span></h2>
-      <p class="section-hint"><strong>Provisional metric:</strong> time from PR opened to the first direct reviewer request, by repository. Ready-for-review timestamps are not yet used; the oldest <code>ReadyForReviewEvent</code> will be collected in a future backfill. Completed intervals use the same time buckets as PR age; pending open PRs are shown separately.</p>
+      <p class="section-hint"><strong>Provisional metric:</strong> time from PR opened to the first direct reviewer request, by repository. Ready-for-review timestamps are not yet used; the oldest <code>ReadyForReviewEvent</code> will be collected in a future backfill. Completed intervals use the same time buckets as PR age; pending open PRs are shown separately. Small nonzero buckets use a minimum display width so their counts remain visible.</p>
       <ul class="legend">${legend}</ul>
       <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Provisional PR opened to reviewer assignment by repository")}</div>
     </section>`;
