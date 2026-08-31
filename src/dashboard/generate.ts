@@ -72,7 +72,13 @@ export function renderDashboardHtml(input: DashboardInput): string {
     input.responseTimes?.openedToAssignment ?? [],
   );
   const diffAgeScatter = renderDifficultyAgeScatter(reviewAges);
-  const assignmentsSection = renderAssignmentsSection(openPrs, historyMetrics, dir);
+  const assignmentsSection = renderAssignmentsSection(
+    openPrs,
+    input.openPrs?.takenAt.slice(0, 10) ?? input.generatedAtIso.slice(0, 10),
+    operationalAssignments,
+    historyMetrics,
+    dir,
+  );
 
   const generatedAt = escapeHtml(input.generatedAtIso);
   const giniFormatted = metrics.giniWork.toFixed(2);
@@ -1031,12 +1037,15 @@ function renderAlgorithmSection(
     </section>`;
 }
 
-function renderLegend(): string {
+function renderLegend(opts?: { includeExistingLoad?: boolean }): string {
+  const existingLoad = opts?.includeExistingLoad
+    ? `<li><span class="swatch" style="background: var(--load-existing)"></span>Existing open reviews</li>`
+    : "";
   const items = BANDS.map(
     (band) =>
       `<li><span class="swatch" style="background: var(--band-${band})"></span>${BAND_LABEL[band]}</li>`,
   ).join("");
-  return `<ul class="legend">${items}</ul>`;
+  return `<ul class="legend">${existingLoad}${items}</ul>`;
 }
 
 function renderOverridesSection(input: DashboardInput, overrides: DashboardInput["overrides"]): string {
@@ -1094,10 +1103,17 @@ function renderOverridesSection(input: DashboardInput, overrides: DashboardInput
  */
 function renderAssignmentsSection(
   openPrs: OpenPrSnapshot[],
+  currentAssignmentDate: string,
+  operationalAssignments: Assignment[],
   historyMetrics: DashboardMetrics,
   dir: Directory,
 ): string {
-  const currentBody = renderCurrentAssignmentsChart(openPrs, dir);
+  const currentBody = renderCurrentAssignmentsChart(
+    openPrs,
+    currentAssignmentDate,
+    operationalAssignments,
+    dir,
+  );
   const historyChart = renderPerPersonChart(historyMetrics, dir);
   const totalOpen = openPrs.length;
   const unassigned = openPrs.filter((pr) => pr.assignees.length === 0).length;
@@ -1113,8 +1129,8 @@ function renderAssignmentsSection(
         <button class="sub-tab" type="button" data-subtab="assign-history">History</button>
       </nav>
       <div class="sub-panel" id="assign-current">
-        <p class="section-hint">${totalOpen > 0 ? `${totalOpen} open PRs right now${unassigned > 0 ? `, ${unassigned} unassigned` : ""}.` : "No open PRs in the latest snapshot."} Click a reviewer name to see their PRs.</p>
-        ${totalOpen > 0 ? `${renderLegend()}${currentBody}` : `<p class="empty">No open PRs in the latest snapshot.</p>`}
+        <p class="section-hint">${totalOpen > 0 ? `${totalOpen} open PRs right now${unassigned > 0 ? `, ${unassigned} unassigned` : ""}. Existing open reviews are neutral; Siara assignments from ${escapeHtml(currentAssignmentDate)} are colored by difficulty.` : "No open PRs in the latest snapshot."} Click a reviewer name to see their PRs.</p>
+        ${totalOpen > 0 ? `${renderLegend({ includeExistingLoad: true })}${currentBody}` : `<p class="empty">No open PRs in the latest snapshot.</p>`}
       </div>
       <div class="sub-panel hidden" id="assign-history">
         <p class="section-hint">${historyTotal} review assignment(s) across ${historyMetrics.activeReviewers} reviewer(s) — one row per PR (includes merged PRs from GitHub review requests, not only net-new Siara picks). Height of the hard band shows who carries the risk.</p>
@@ -1126,6 +1142,8 @@ function renderAssignmentsSection(
 /** Stacked bar chart of open review load per reviewer (current snapshot). */
 function renderCurrentAssignmentsChart(
   openPrs: OpenPrSnapshot[],
+  currentAssignmentDate: string,
+  operationalAssignments: Assignment[],
   dir: Directory,
 ): string {
   if (openPrs.length === 0) {
@@ -1134,6 +1152,9 @@ function renderCurrentAssignmentsChart(
 
   interface ReviewerState {
     login: string;
+    /** Requested reviews not attributable to the latest Siara assignment. */
+    existing: number;
+    /** All current open review requests for this reviewer. */
     total: number;
     simple: number;
     moderate: number;
@@ -1141,18 +1162,40 @@ function renderCurrentAssignmentsChart(
   }
 
   const byReviewer = new Map<string, ReviewerState>();
+  const ensure = (login: string): ReviewerState => {
+    const existing = byReviewer.get(login);
+    if (existing) return existing;
+    const fresh: ReviewerState = {
+      login,
+      existing: 0,
+      total: 0,
+      simple: 0,
+      moderate: 0,
+      hard: 0,
+    };
+    byReviewer.set(login, fresh);
+    return fresh;
+  };
+
+  // The last same-day operational entry is Siara's latest assignment for a PR.
+  // Older still-open assignments are part of the neutral baseline for this run.
+  const latestAssignmentByPr = new Map<string, Assignment>();
+  for (const assignment of operationalAssignments) {
+    if (assignment.date !== currentAssignmentDate) continue;
+    if (assignment.rationale.startsWith("[AUTO-SCORED]")) continue;
+    latestAssignmentByPr.set(`${assignment.repo}#${assignment.pr}`, assignment);
+  }
+
   for (const pr of openPrs) {
+    const siaraAssignment = latestAssignmentByPr.get(`${pr.repo}#${pr.pr}`);
     for (const login of pr.assignees) {
-      const s = byReviewer.get(login) ?? {
-        login,
-        total: 0,
-        simple: 0,
-        moderate: 0,
-        hard: 0,
-      };
+      const s = ensure(login);
       s.total++;
-      if (pr.band) s[pr.band]++;
-      byReviewer.set(login, s);
+      if (siaraAssignment?.assignees.includes(login)) {
+        s[siaraAssignment.band]++;
+      } else {
+        s.existing++;
+      }
     }
   }
 
@@ -1176,6 +1219,17 @@ function renderCurrentAssignmentsChart(
     .map((r, i) => {
       const y = i * rowH + (rowH - barH) / 2;
       let x = barsX;
+      const existingSeg = (() => {
+        if (r.existing <= 0) return "";
+        const w = (r.existing / maxTotal) * barMax;
+        const rect = `<rect x="${fmt(x)}" y="${y}" width="${fmt(w)}" height="${barH}" fill="var(--load-existing)"><title>${escapeHtml(personTitle(r.login, dir))} — Existing open reviews: ${r.existing}</title></rect>`;
+        const num =
+          w >= 16
+            ? `<text x="${fmt(x + w / 2)}" y="${y + barH / 2}" class="seg-num" text-anchor="middle" dominant-baseline="central">${r.existing}</text>`
+            : "";
+        x += w;
+        return rect + num;
+      })();
       const segs = BANDS.map((band) => {
         const n = r[band];
         if (n <= 0) return "";
@@ -1191,7 +1245,7 @@ function renderCurrentAssignmentsChart(
 
       const label = `<text x="${labelW - 10}" y="${y + barH / 2}" class="svg-label svg-link" data-filter-login="${escapeHtml(r.login)}" text-anchor="end" dominant-baseline="central">${escapeHtml(displayName(r.login, dir))}<title>${escapeHtml(personTitle(r.login, dir))}</title></text>`;
       const count = `<text x="${labelW + 6}" y="${y + barH / 2}" class="svg-count" dominant-baseline="central">${r.total}</text>`;
-      return label + count + segs;
+      return label + count + existingSeg + segs;
     })
     .join("");
 
@@ -1199,7 +1253,7 @@ function renderCurrentAssignmentsChart(
     W,
     height,
     body,
-    "Current open review assignments per person",
+    "Current open reviews per person: existing load and snapshot-day Siara assignments by difficulty",
   );
 }
 
@@ -1224,6 +1278,7 @@ const STYLES = `
       --band-simple: #4f9d69;
       --band-moderate: #d99b28;
       --band-hard: #d1495b;
+      --load-existing: #6b7280;
     }
 
     [data-theme="dark"] {
@@ -1236,6 +1291,7 @@ const STYLES = `
       --band-simple: #56b877;
       --band-moderate: #e6ac3e;
       --band-hard: #e05c6e;
+      --load-existing: #596273;
     }
 
     * { box-sizing: border-box; }

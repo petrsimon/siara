@@ -631,6 +631,182 @@ describe("generateDashboard", () => {
     expect(html).not.toContain("<h2>Assignment history</h2>");
   });
 
+  it("prepends existing review load before current Siara assignments", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({
+          date: "2026-08-25",
+          assignees: ["bob"],
+          band: "hard",
+          pr: 11,
+        }),
+      ],
+      openPrs: {
+        takenAt: "2026-08-25T09:00:00.000Z",
+        prs: [
+          {
+            repo: "org/repo",
+            pr: 10,
+            title: "existing review request",
+            author: "alice",
+            assignees: ["bob"],
+            ageDays: 1,
+            band: "simple",
+            staleness: "normal",
+          },
+          {
+            repo: "org/repo",
+            pr: 11,
+            title: "assigned by siara",
+            author: "carol",
+            assignees: ["bob"],
+            ageDays: 2,
+            band: "hard",
+            staleness: "normal",
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+
+    const currentPanel = html.slice(
+      html.indexOf('id="assign-current"'),
+      html.indexOf('id="assign-history"'),
+    );
+    const chartStart = currentPanel.indexOf(
+      'aria-label="Current open reviews per person: existing load and snapshot-day Siara assignments by difficulty"',
+    );
+    const chart = currentPanel.slice(
+      chartStart,
+      currentPanel.indexOf("</svg>", chartStart),
+    );
+    // bob is the sole chart row: 1 existing request precedes 1 Siara hard assignment.
+    const bobExisting = chart.indexOf('fill="var(--load-existing)"');
+    const bobHard = chart.indexOf('fill="var(--band-hard)"');
+    expect(bobExisting).toBeGreaterThan(-1);
+    expect(bobHard).toBeGreaterThan(-1);
+    expect(bobExisting).toBeLessThan(bobHard);
+    expect(chart).toContain("Existing open reviews: 1");
+    expect(chart.match(/width="215"/g)).toHaveLength(2);
+    // The displayed count remains the person's complete current review load.
+    expect(currentPanel).toMatch(
+      /data-filter-login="bob"[\s\S]*?class="svg-count"[^>]*>2</,
+    );
+  });
+
+  it("keeps older and auto-scored open reviews in the neutral baseline", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({
+          date: "2026-08-24",
+          assignees: ["bob"],
+          band: "simple",
+          pr: 10,
+        }),
+        assignment({
+          date: "2026-08-25",
+          assignees: ["bob"],
+          band: "hard",
+          pr: 11,
+          rationale: "[AUTO-SCORED] Existing PR scored for load tracking",
+          candidates: [],
+        }),
+      ],
+      openPrs: {
+        takenAt: "2026-08-25T09:00:00.000Z",
+        prs: [
+          {
+            repo: "org/repo",
+            pr: 10,
+            title: "older Siara assignment",
+            author: "alice",
+            assignees: ["bob"],
+            band: "simple",
+            staleness: "normal",
+          },
+          {
+            repo: "org/repo",
+            pr: 11,
+            title: "existing review scored today",
+            author: "carol",
+            assignees: ["bob"],
+            band: "hard",
+            staleness: "normal",
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+
+    const currentPanel = html.slice(
+      html.indexOf('id="assign-current"'),
+      html.indexOf('id="assign-history"'),
+    );
+    const chartStart = currentPanel.indexOf(
+      'aria-label="Current open reviews per person: existing load and snapshot-day Siara assignments by difficulty"',
+    );
+    const chart = currentPanel.slice(
+      chartStart,
+      currentPanel.indexOf("</svg>", chartStart),
+    );
+
+    expect(chart).toContain("Existing open reviews: 2");
+    expect(chart).toContain('fill="var(--load-existing)"');
+    expect(chart).not.toContain('fill="var(--band-simple)"');
+    expect(chart).not.toContain('fill="var(--band-hard)"');
+    expect(chart).toMatch(
+      /data-filter-login="bob"[\s\S]*?class="svg-count"[^>]*>2</,
+    );
+  });
+
+  it("keeps the existing-load legend on Current only — History stays difficulty-only", () => {
+    const html = generateDashboard({
+      assignments: [
+        assignment({ assignees: ["alice"], band: "hard", pr: 1 }),
+        assignment({ assignees: ["bob"], band: "simple", pr: 2 }),
+      ],
+      openPrs: {
+        takenAt: "2026-08-25T09:00:00.000Z",
+        prs: [
+          {
+            repo: "org/repo",
+            pr: 1,
+            title: "x",
+            author: "alice",
+            assignees: ["bob"],
+            ageDays: 1,
+            band: "hard",
+            staleness: "normal",
+          },
+        ],
+      },
+      generatedAtIso,
+    });
+
+    const currentPanel = html.slice(
+      html.indexOf('id="assign-current"'),
+      html.indexOf('id="assign-history"'),
+    );
+    const historyStart = html.indexOf('id="assign-history"');
+    const historyPanel = html.slice(
+      historyStart,
+      html.indexOf("</section>", historyStart),
+    );
+
+    expect(currentPanel).toContain("Existing open reviews");
+    expect(currentPanel).toContain("var(--load-existing)");
+    // Legend order: existing load before Simple/Moderate/Hard.
+    const existingLegend = currentPanel.indexOf(">Existing open reviews<");
+    const simpleLegend = currentPanel.indexOf(">Simple<");
+    expect(existingLegend).toBeGreaterThan(-1);
+    expect(simpleLegend).toBeGreaterThan(-1);
+    expect(existingLegend).toBeLessThan(simpleLegend);
+
+    expect(historyPanel).not.toContain("Existing open reviews");
+    expect(historyPanel).not.toContain("var(--load-existing)");
+    expect(historyPanel).toContain(">Simple<");
+  });
+
   it("includes merged PRs from the response report in assignment history", () => {
     const html = generateDashboard({
       assignments: [assignment({ assignees: ["alice"], band: "simple", pr: 1 })],
