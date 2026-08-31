@@ -145,7 +145,7 @@ describe("charts", () => {
       expect(html).toContain("circle");
     });
 
-    it("should skip PRs without age or band", () => {
+    it("should show points without a band as unknown difficulty", () => {
       const points: ReviewAgePoint[] = [
         { repo: "org/repo", pr: 1, ageDays: 1, status: "open" },
         { repo: "org/repo", pr: 2, ageDays: 5, status: "merged" },
@@ -153,9 +153,9 @@ describe("charts", () => {
       ];
       const html = renderDifficultyAgeScatter(points);
       
-      // Should only render 1 point (PR 3)
       expect(html).toContain("circle");
-      expect(html).not.toContain("No open PRs");
+      expect(html).toContain("Unknown difficulty");
+      expect(html).toContain("1 point has a known difficulty band; 2 points are shown separately");
     });
   });
 

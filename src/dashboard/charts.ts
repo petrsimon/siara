@@ -434,11 +434,7 @@ function renderHistogram(
  * Y-axis: review age in days, colored by band.
  */
 export function renderDifficultyAgeScatter(points: ReviewAgePoint[]): string {
-  const agedPoints = points.filter(
-    (point): point is ReviewAgePoint & { band: DifficultyBand } => point.band !== undefined,
-  );
-
-  if (agedPoints.length === 0) {
+  if (points.length === 0) {
     return `<section><h2>Difficulty × review age</h2><p class="empty">No review assignments with difficulty and lifecycle-age data.</p></section>`;
   }
   
@@ -451,39 +447,46 @@ export function renderDifficultyAgeScatter(points: ReviewAgePoint[]): string {
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   
-  // Map bands to representative difficulty values for X-axis positioning
-  const bandToDiff: Record<DifficultyBand, number> = {
-    simple: 0.15,
-    moderate: 0.45,
-    hard: 0.75,
+  // Map bands to representative difficulty values for X-axis positioning.
+  // Unknown bands are shown separately rather than silently dropping their
+  // review-age points from the chart.
+  const bandToDiff: Record<DifficultyBand | "unknown", number> = {
+    simple: 0.125,
+    moderate: 0.375,
+    hard: 0.625,
+    unknown: 0.875,
   };
+  const knownCount = points.filter((point) => point.band !== undefined).length;
+  const unknownCount = points.length - knownCount;
   
-  const minAge = Math.min(...agedPoints.map((point) => point.ageDays));
-  const maxAge = Math.max(...agedPoints.map((point) => point.ageDays));
+  const minAge = Math.min(...points.map((point) => point.ageDays));
+  const maxAge = Math.max(...points.map((point) => point.ageDays));
   
   const ageRange = maxAge - minAge || 1;
   
   // Draw points with jitter to prevent exact overlap
-  const circles = agedPoints.map((pr) => {
-    const baseDiff = bandToDiff[pr.band];
+  const circles = points.map((pr) => {
+    const category = pr.band ?? "unknown";
+    const baseDiff = bandToDiff[category];
     // Add small random jitter within band range (±0.08)
     const jitter = (Math.random() - 0.5) * 0.16;
     const diffValue = Math.max(0, Math.min(1, baseDiff + jitter));
     
     const x = padL + diffValue * plotW;
     const y = padT + plotH - ((pr.ageDays - minAge) / ageRange) * plotH;
-    const color = `var(--band-${pr.band})`;
+    const color = pr.band === undefined ? "var(--muted)" : `var(--band-${pr.band})`;
     
     return `<circle cx="${fmt(x)}" cy="${fmt(y)}" r="4" fill="${color}" fill-opacity="0.7" stroke="#fff" stroke-width="0.5"><title>${escapeHtml(pr.repo)}#${pr.pr}
-Band: ${BAND_LABEL[pr.band]}
+Band: ${pr.band === undefined ? "Unknown difficulty" : BAND_LABEL[pr.band]}
 Review age: ${fmtDays(pr.ageDays)}d (${pr.status === "merged" ? "merged" : "open at report time"})</title></circle>`;
   }).join("");
   
   // X-axis ticks (bands)
   const xTicks = [
-    { val: 0.15, label: 'Simple' },
-    { val: 0.45, label: 'Moderate' },
-    { val: 0.75, label: 'Hard' },
+    { val: 0.125, label: 'Simple' },
+    { val: 0.375, label: 'Moderate' },
+    { val: 0.625, label: 'Hard' },
+    { val: 0.875, label: 'Unknown' },
   ].map(({ val, label }) => {
     const x = padL + val * plotW;
     return `<text x="${fmt(x)}" y="${H - 20}" class="svg-tick" text-anchor="middle">${label}</text>`;
@@ -495,7 +498,7 @@ Review age: ${fmtDays(pr.ageDays)}d (${pr.status === "merged" ? "merged" : "open
     const val = minAge + i * yStep;
     if (val > maxAge) return "";
     const y = padT + plotH - ((val - minAge) / ageRange) * plotH;
-    return `<text x="${padL - 8}" y="${fmt(y)}" class="svg-tick" text-anchor="end" dominant-baseline="central">${val}d</text>`;
+    return `<text x="${padL - 8}" y="${fmt(y)}" class="svg-tick" text-anchor="end" dominant-baseline="central">${fmtDays(val)}d</text>`;
   }).join("");
   
   // Axes
@@ -516,12 +519,14 @@ Review age: ${fmtDays(pr.ageDays)}d (${pr.status === "merged" ? "merged" : "open
       <text x="14" y="18" class="svg-tick" dominant-baseline="central">${BAND_LABEL.moderate}</text>
       <circle cx="6" cy="36" r="4" fill="var(--band-hard)" fill-opacity="0.7" stroke="#fff" stroke-width="0.5"/>
       <text x="14" y="36" class="svg-tick" dominant-baseline="central">${BAND_LABEL.hard}</text>
+      <circle cx="6" cy="54" r="4" fill="var(--muted)" fill-opacity="0.7" stroke="#fff" stroke-width="0.5"/>
+      <text x="14" y="54" class="svg-tick" dominant-baseline="central">Unknown difficulty</text>
     </g>
   `;
   
   return `<section>
       <h2>Difficulty × review age</h2>
-      <p class="section-hint">Do harder PRs spend longer in review? Each point is a PR from the lifecycle report. Position shows difficulty band (X, with jitter to prevent overlap) and review age (Y).</p>
+      <p class="section-hint">Do harder PRs spend longer in review? Each point is a PR from the lifecycle report. Position shows difficulty band (X, with jitter to prevent overlap) and review age (Y). ${knownCount} point${knownCount === 1 ? " has" : "s have"} a known difficulty band; ${unknownCount} point${unknownCount === 1 ? " is" : "s are"} shown separately because their band is unavailable.</p>
       ${svg(W, H, axes + circles + xTicks + yTicks + legend, "Difficulty vs review age scatter plot")}
     </section>`;
 }
