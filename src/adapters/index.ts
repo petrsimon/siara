@@ -20,23 +20,12 @@ export interface ReviewRequestEvent {
   kind: "requested" | "removed";
 }
 
-/** A GitHub timeline event marking a draft PR as ready for review. */
-export interface ReadyForReviewEvent {
-  pr: number;
-  /** ISO timestamp of the event. */
-  at: string;
-}
-
-/** Lifecycle events fetched together for the ready-to-assignment metric. */
-export interface PullRequestLifecycleEvents {
-  reviewRequests: ReviewRequestEvent[];
-  readyForReview: ReadyForReviewEvent[];
-}
-
 /** A PR that merged within the lookback window — powers time-to-merge stats. */
 export interface MergedPullRequest {
   number: number;
   author: string;
+  /** ISO timestamp the PR was opened, when returned by GitHub. */
+  createdAt?: string;
   /** ISO timestamp the PR was merged. */
   mergedAt: string;
 }
@@ -49,11 +38,11 @@ export interface GitHubAdapter {
     repo: string,
     sinceIso: string,
   ): Promise<MergedPullRequest[]>;
-  /** Timeline lifecycle events for the given PRs. */
-  getPullRequestLifecycleEvents(
+  /** Timeline of user review-request / request-removed events for the given PRs. */
+  getReviewRequestEvents(
     repo: string,
     prNumbers: number[],
-  ): Promise<PullRequestLifecycleEvents>;
+  ): Promise<ReviewRequestEvent[]>;
   /** Per-file diff stats for a PR. */
   getPullRequestFiles(repo: string, prNumber: number): Promise<PullRequest["files"]>;
   /** Commit counts on given paths per author within the sync window. */

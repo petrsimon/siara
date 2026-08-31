@@ -8,7 +8,7 @@ import {
   renderAgeDistribution,
   renderDifficultyAgeScatter,
   renderRepoAgeDistribution,
-  renderRepoReadyToAssignmentDistribution,
+  renderRepoOpenedToAssignmentDistribution,
   CHART_STYLES,
 } from "./charts.js";
 
@@ -59,8 +59,8 @@ export function renderDashboardHtml(input: DashboardInput): string {
   );
   const ageDistSection = renderAgeDistribution(openPrs);
   const repoAgeSection = renderRepoAgeDistribution(openPrs);
-  const readyToAssignmentSection = renderRepoReadyToAssignmentDistribution(
-    input.responseTimes?.readyToAssignment ?? [],
+  const openedToAssignmentSection = renderRepoOpenedToAssignmentDistribution(
+    input.responseTimes?.openedToAssignment ?? [],
   );
   const diffAgeScatter = renderDifficultyAgeScatter(openPrs);
   const assignmentsSection = renderAssignmentsSection(openPrs, historyMetrics, dir);
@@ -156,7 +156,7 @@ ${STYLES}
 
     ${repoAgeSection}
 
-    ${readyToAssignmentSection}
+    ${openedToAssignmentSection}
 
     ${diffAgeScatter}
 

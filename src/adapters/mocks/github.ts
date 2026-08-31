@@ -1,7 +1,6 @@
 import type {
   GitHubAdapter,
   MergedPullRequest,
-  PullRequestLifecycleEvents,
   ReviewRequestEvent,
 } from "../index.js";
 import type {
@@ -24,8 +23,6 @@ export interface GitHubMockFixture {
   openReviewLoad?: Record<string, number>;
   /** GitHub review-request timeline events keyed by repo. */
   reviewRequestEvents?: Record<string, ReviewRequestEvent[]>;
-  /** GitHub ready-for-review timeline events keyed by repo. */
-  readyForReviewEvents?: Record<string, { pr: number; at: string }[]>;
   /** Recently-merged PRs keyed by repo. */
   mergedPullRequests?: Record<string, MergedPullRequest[]>;
   /** Raw CODEOWNERS text keyed by repo. */
@@ -130,19 +127,14 @@ export class MockGitHubAdapter implements GitHubAdapter {
     return result;
   }
 
-  async getPullRequestLifecycleEvents(
+  async getReviewRequestEvents(
     repo: string,
     prNumbers: number[],
-  ): Promise<PullRequestLifecycleEvents> {
+  ): Promise<ReviewRequestEvent[]> {
     const wanted = new Set(prNumbers);
-    return {
-      reviewRequests: (this.fixture.reviewRequestEvents?.[repo] ?? []).filter((ev) =>
-        wanted.has(ev.pr),
-      ),
-      readyForReview: (this.fixture.readyForReviewEvents?.[repo] ?? []).filter((ev) =>
-        wanted.has(ev.pr),
-      ),
-    };
+    return (this.fixture.reviewRequestEvents?.[repo] ?? []).filter((ev) =>
+      wanted.has(ev.pr),
+    );
   }
 
   async postComment(

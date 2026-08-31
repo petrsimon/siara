@@ -6,7 +6,7 @@
 import type {
   DifficultyBand,
   OpenPrSnapshot,
-  ReadyForReviewAssignment,
+  OpenedToAssignment,
   ReviewResponse,
 } from "../types.js";
 import { escapeHtml } from "./html.js";
@@ -182,11 +182,11 @@ export function renderRepoAgeDistribution(openPrs: OpenPrSnapshot[]): string {
 }
 
 /**
- * Stacked ready-for-review-to-assignment buckets by repository. Completed bars
+ * Stacked PR-opened-to-assignment buckets by repository. Completed bars
  * show elapsed time; PRs still waiting for assignment are counted separately.
  */
-export function renderRepoReadyToAssignmentDistribution(
-  observations: ReadyForReviewAssignment[],
+export function renderRepoOpenedToAssignmentDistribution(
+  observations: OpenedToAssignment[],
 ): string {
   const byRepo = new Map<string, { completed: number[]; pending: number }>();
   for (const observation of observations) {
@@ -200,7 +200,7 @@ export function renderRepoReadyToAssignmentDistribution(
   }
 
   if (byRepo.size === 0) {
-    return `<section><h2>Ready for review to reviewer assignment</h2><p class="empty">No PRs with a known ready-for-review transition.</p></section>`;
+    return `<section><h2>PR opened to reviewer assignment <span class="provisional">(provisional)</span></h2><p class="empty">No PRs with a known opened timestamp.</p></section>`;
   }
 
   const rows = [...byRepo.entries()]
@@ -253,10 +253,10 @@ export function renderRepoReadyToAssignmentDistribution(
   ).join("");
 
   return `<section>
-      <h2>Ready for review to reviewer assignment</h2>
-      <p class="section-hint">Time from the first explicit ready-for-review transition to the first direct reviewer request, by repository. Completed intervals use the same time buckets as PR age; pending PRs are shown separately.</p>
+      <h2>PR opened to reviewer assignment <span class="provisional">(provisional)</span></h2>
+      <p class="section-hint"><strong>Provisional metric:</strong> time from PR opened to the first direct reviewer request, by repository. Ready-for-review timestamps are not yet used; the oldest <code>ReadyForReviewEvent</code> will be collected in a future backfill. Completed intervals use the same time buckets as PR age; pending open PRs are shown separately.</p>
       <ul class="legend">${legend}</ul>
-      <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Ready for review to reviewer assignment by repository")}</div>
+      <div class="scroll-x">${svg(labelW + plotW + totalW, H, body, "Provisional PR opened to reviewer assignment by repository")}</div>
     </section>`;
 }
 

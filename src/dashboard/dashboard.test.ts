@@ -358,11 +358,11 @@ describe("generateDashboard", () => {
       responseTimes: {
         takenAt: "2026-08-25T09:00:00.000Z",
         responses: [],
-        readyToAssignment: [
+        openedToAssignment: [
           {
             repo: "org/repo",
             pr: 7,
-            readyAt: "2026-08-20T00:00:00.000Z",
+            openedAt: "2026-08-20T00:00:00.000Z",
             assignedAt: "2026-08-21T00:00:00.000Z",
             reviewer: "bob",
             latencyHours: 24,
@@ -512,7 +512,7 @@ describe("generateDashboard", () => {
     });
     expect(html).toContain("Open PRs");
     expect(html).toContain("PR age by repository");
-    expect(html).toContain("Ready for review to reviewer assignment");
+    expect(html).toContain("PR opened to reviewer assignment");
     expect(html).toContain("Add auth guard");
     expect(html).toContain("6d");
     expect(html).toContain("overdue");

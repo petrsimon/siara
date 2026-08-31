@@ -5,7 +5,6 @@ import {
   parsePullRequests,
   parseReviewHistory,
   parseReviewRequestTimeline,
-  parseReadyForReviewTimeline,
   openRequestStartedAt,
   firstRequestedAt,
   parseMergedPullRequests,
@@ -196,20 +195,6 @@ describe("parseReviewRequestTimeline", () => {
   });
 });
 
-describe("parseReadyForReviewTimeline", () => {
-  it("keeps ready transitions and ignores unrelated timeline events", () => {
-    expect(parseReadyForReviewTimeline(7, {
-      timelineItems: {
-        nodes: [
-          { __typename: "ReadyForReviewEvent", createdAt: "2026-01-03T00:00:00.000Z" },
-          { __typename: "ReadyForReviewEvent", createdAt: "" },
-          { __typename: "ReviewRequestedEvent", createdAt: "2026-01-04T00:00:00.000Z" },
-        ],
-      },
-    })).toEqual([{ pr: 7, at: "2026-01-03T00:00:00.000Z" }]);
-  });
-});
-
 describe("openRequestStartedAt", () => {
   it("uses the latest still-open request per reviewer", () => {
     const starts = openRequestStartedAt([
@@ -240,16 +225,16 @@ describe("firstRequestedAt", () => {
 });
 
 describe("parseMergedPullRequests", () => {
-  it("maps number/author/mergedAt and skips rows without a merge time", () => {
+  it("maps number/author/createdAt/mergedAt and skips rows without a merge time", () => {
     const merged = parseMergedPullRequests([
-      { number: 7, author: { login: "alice" }, mergedAt: "2026-08-20T00:00:00.000Z" },
+      { number: 7, author: { login: "alice" }, createdAt: "2026-08-01T00:00:00.000Z", mergedAt: "2026-08-20T00:00:00.000Z" },
       { number: 8, author: null, mergedAt: "2026-08-21T00:00:00.000Z" },
       { number: 9, author: { login: "bob" }, mergedAt: null }, // not merged
       { number: 10 }, // missing fields
     ]);
 
     expect(merged).toEqual([
-      { number: 7, author: "alice", mergedAt: "2026-08-20T00:00:00.000Z" },
+      { number: 7, author: "alice", createdAt: "2026-08-01T00:00:00.000Z", mergedAt: "2026-08-20T00:00:00.000Z" },
       { number: 8, author: "unknown", mergedAt: "2026-08-21T00:00:00.000Z" },
     ]);
   });

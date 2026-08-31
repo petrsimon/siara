@@ -9,8 +9,6 @@ import { promisify } from "node:util";
 import type {
   GitHubAdapter,
   MergedPullRequest,
-  PullRequestLifecycleEvents,
-  ReadyForReviewEvent,
   ReviewRequestEvent,
 } from "./index.js";
 import type {
@@ -257,25 +255,6 @@ export function parseReviewRequestTimeline(
   return out;
 }
 
-/** Map a GitHub timeline payload to ready-for-review transitions. */
-export function parseReadyForReviewTimeline(
-  pr: number,
-  payload: unknown,
-): ReadyForReviewEvent[] {
-  if (!payload || typeof payload !== "object") return [];
-  const nodes = (payload as GqlPullRequestTimeline).timelineItems?.nodes;
-  if (!Array.isArray(nodes)) return [];
-
-  const out: ReadyForReviewEvent[] = [];
-  for (const node of nodes) {
-    if (!node || typeof node !== "object") continue;
-    if (node.__typename !== "ReadyForReviewEvent") continue;
-    if (typeof node.createdAt !== "string" || node.createdAt.length === 0) continue;
-    out.push({ pr, at: node.createdAt });
-  }
-  return out;
-}
-
 /**
  * Latest still-open GitHub review request per PR+login.
  * Key is `${pr}\0${login}` → ISO timestamp of the current request.
@@ -321,7 +300,7 @@ export function firstRequestedAt(
   return out;
 }
 
-/** Parse `gh pr list --state merged --json number,author,mergedAt`. */
+/** Parse `gh pr list --state merged --json number,author,createdAt,mergedAt`. */
 export function parseMergedPullRequests(json: unknown): MergedPullRequest[] {
   if (!Array.isArray(json)) return [];
   const out: MergedPullRequest[] = [];
@@ -330,6 +309,7 @@ export function parseMergedPullRequests(json: unknown): MergedPullRequest[] {
     const raw = item as {
       number?: unknown;
       author?: { login?: string | null } | null;
+      createdAt?: unknown;
       mergedAt?: unknown;
     };
     if (typeof raw.number !== "number") continue;
@@ -337,6 +317,9 @@ export function parseMergedPullRequests(json: unknown): MergedPullRequest[] {
     out.push({
       number: raw.number,
       author: raw.author?.login ?? "unknown",
+      ...(typeof raw.createdAt === "string" && raw.createdAt.length > 0
+        ? { createdAt: raw.createdAt }
+        : {}),
       mergedAt: raw.mergedAt,
     });
   }
@@ -396,7 +379,7 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
       "--limit",
       "500",
       "--json",
-      "number,author,mergedAt",
+      "number,author,createdAt,mergedAt",
     ]);
     return parseMergedPullRequests(JSON.parse(stdout) as unknown);
   }
@@ -573,25 +556,20 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
     return result;
   }
 
-  async getPullRequestLifecycleEvents(
+  async getReviewRequestEvents(
     repo: string,
     prNumbers: number[],
-  ): Promise<PullRequestLifecycleEvents> {
+  ): Promise<ReviewRequestEvent[]> {
     const slash = repo.indexOf("/");
-    if (slash <= 0 || prNumbers.length === 0) {
-      return { reviewRequests: [], readyForReview: [] };
-    }
+    if (slash <= 0 || prNumbers.length === 0) return [];
     const owner = repo.slice(0, slash);
     const name = repo.slice(slash + 1);
     const unique = [...new Set(prNumbers)].filter((n) => Number.isInteger(n) && n > 0);
-    if (unique.length === 0) {
-      return { reviewRequests: [], readyForReview: [] };
-    }
+    if (unique.length === 0) return [];
 
-    const reviewRequests: ReviewRequestEvent[] = [];
-    const readyForReview: ReadyForReviewEvent[] = [];
+    const out: ReviewRequestEvent[] = [];
     const fragment = `
-            timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT, READY_FOR_REVIEW_EVENT], first: 100) {
+            timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT], first: 100) {
               nodes {
                 __typename
                 ... on ReviewRequestedEvent {
@@ -601,9 +579,6 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
                 ... on ReviewRequestRemovedEvent {
                   createdAt
                   requestedReviewer { __typename ... on User { login } }
-                }
-                ... on ReadyForReviewEvent {
-                  createdAt
                 }
               }
             }`;
@@ -626,14 +601,13 @@ export class GhCliGitHubAdapter implements GitHubAdapter {
           if (pr === undefined) continue;
           const payload = repoPayload[`p${j}`];
           if (!payload) continue;
-          reviewRequests.push(...parseReviewRequestTimeline(pr, payload));
-          readyForReview.push(...parseReadyForReviewTimeline(pr, payload));
+          out.push(...parseReviewRequestTimeline(pr, payload));
         }
       } catch {
         // Skip a failed batch rather than aborting the whole report.
       }
     }
-    return { reviewRequests, readyForReview };
+    return out;
   }
 
   async postComment(

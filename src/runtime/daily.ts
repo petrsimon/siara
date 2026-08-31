@@ -14,7 +14,7 @@ import type {
   OpenPrSnapshot,
   Override,
   PullRequest,
-  ReadyForReviewAssignment,
+  OpenedToAssignment,
   ReviewResponse,
 } from "../types.js";
 import { firstRequestedAt, openRequestStartedAt } from "../adapters/github.js";
@@ -86,44 +86,39 @@ function latestAssignmentsInWindow(
   return map;
 }
 
-function computeReadyToAssignment(
+function computeOpenedToAssignment(
   repo: string,
   prNumbers: number[],
-  lifecycle: Awaited<ReturnType<SiaraDeps["github"]["getPullRequestLifecycleEvents"]>>,
+  requestEvents: Awaited<ReturnType<SiaraDeps["github"]["getReviewRequestEvents"]>>,
+  openedAtByPr: Map<number, string>,
+  openPrNumbers: Set<number>,
   nowIso: string,
-): ReadyForReviewAssignment[] {
-  const firstReadyAt = new Map<number, string>();
-  for (const event of lifecycle.readyForReview) {
-    const previous = firstReadyAt.get(event.pr);
-    if (previous === undefined || event.at < previous) {
-      firstReadyAt.set(event.pr, event.at);
-    }
-  }
-
-  const rows: ReadyForReviewAssignment[] = [];
+): OpenedToAssignment[] {
+  const rows: OpenedToAssignment[] = [];
   for (const pr of prNumbers) {
-    const readyAt = firstReadyAt.get(pr);
-    if (readyAt === undefined) continue;
+    const openedAt = openedAtByPr.get(pr);
+    if (openedAt === undefined) continue;
 
-    const request = lifecycle.reviewRequests
-      .filter((event) => event.pr === pr && event.kind === "requested" && event.at >= readyAt)
+    const request = requestEvents
+      .filter((event) => event.pr === pr && event.kind === "requested" && event.at >= openedAt)
       .sort((a, b) => a.at.localeCompare(b.at))[0];
     if (request === undefined) {
+      if (!openPrNumbers.has(pr)) continue;
       rows.push({
         repo,
         pr,
-        readyAt,
+        openedAt,
         outstanding: true,
-        waitingHours: hoursBetween(readyAt, nowIso),
+        waitingHours: hoursBetween(openedAt, nowIso),
       });
     } else {
       rows.push({
         repo,
         pr,
-        readyAt,
+        openedAt,
         assignedAt: request.at,
         reviewer: request.login,
-        latencyHours: hoursBetween(readyAt, request.at),
+        latencyHours: hoursBetween(openedAt, request.at),
         outstanding: false,
       });
     }
@@ -141,7 +136,7 @@ async function computeResponses(
   deps: SiaraDeps,
   nowIso: string,
   openPrs: PullRequest[],
-): Promise<{ responses: ReviewResponse[]; readyToAssignment: ReadyForReviewAssignment[] }> {
+): Promise<{ responses: ReviewResponse[]; openedToAssignment: OpenedToAssignment[] }> {
   const sinceIso = subtractDays(nowIso, deps.teamConfig.syncWindowDays);
   const windowStartDate = sinceIso.slice(0, 10);
   const latest = latestAssignmentsInWindow(
@@ -175,7 +170,7 @@ async function computeResponses(
   const firstReviewAt = new Map<string, string>();
   const openStartsByRepo = new Map<string, Map<string, string>>();
   const firstReqByRepo = new Map<string, Map<string, string>>();
-  const readyToAssignment: ReadyForReviewAssignment[] = [];
+  const openedToAssignment: OpenedToAssignment[] = [];
   for (const [repo, prNumbers] of prNumbersByRepo) {
     const events = await deps.store.getReviewEvents(repo, prNumbers);
     for (const ev of events) {
@@ -185,11 +180,27 @@ async function computeResponses(
         firstReviewAt.set(key, ev.reviewedAt);
       }
     }
-    const lifecycle = await deps.github.getPullRequestLifecycleEvents(repo, prNumbers);
-    openStartsByRepo.set(repo, openRequestStartedAt(lifecycle.reviewRequests));
-    firstReqByRepo.set(repo, firstRequestedAt(lifecycle.reviewRequests));
-    readyToAssignment.push(
-      ...computeReadyToAssignment(repo, prNumbers, lifecycle, nowIso),
+    const requestEvents = await deps.github.getReviewRequestEvents(repo, prNumbers);
+    openStartsByRepo.set(repo, openRequestStartedAt(requestEvents));
+    firstReqByRepo.set(repo, firstRequestedAt(requestEvents));
+    const openedAtByPr = new Map<number, string>();
+    for (const pr of openPrs) {
+      if (pr.repo === repo && pr.createdAt !== undefined) {
+        openedAtByPr.set(pr.number, pr.createdAt);
+      }
+    }
+    for (const merged of mergedByRepo.get(repo) ?? []) {
+      if (merged.createdAt !== undefined) openedAtByPr.set(merged.number, merged.createdAt);
+    }
+    openedToAssignment.push(
+      ...computeOpenedToAssignment(
+        repo,
+        prNumbers,
+        requestEvents,
+        openedAtByPr,
+        new Set(openPrs.filter((pr) => pr.repo === repo).map((pr) => pr.number)),
+        nowIso,
+      ),
     );
   }
 
@@ -314,7 +325,7 @@ async function computeResponses(
     const author = authorByPr.get(prKey(r.repo, r.pr));
     if (author !== undefined) r.author = author;
   }
-  return { responses, readyToAssignment };
+  return { responses, openedToAssignment };
 }
 
 export async function daily(
@@ -433,7 +444,7 @@ export async function daily(
     if (openPrs.length === 0) {
       continue;
     }
-    const lifecycle = await deps.github.getPullRequestLifecycleEvents(
+    const events = await deps.github.getReviewRequestEvents(
       repo,
       openPrs.map((p) => p.number),
     );
@@ -444,7 +455,7 @@ export async function daily(
         suggestedByPr.set(pr.number, suggested);
       }
     }
-    for (const d of detectDeclines(openPrs, lifecycle.reviewRequests, suggestedByPr)) {
+    for (const d of detectDeclines(openPrs, events, suggestedByPr)) {
       if (!dry) {
         await deps.store.recordDecline({
           repo,
@@ -685,11 +696,11 @@ export async function daily(
     // Review-latency report: outstanding waits from GitHub review-requested
     // time; completed reviews from the in-window assignment log.
     const allOpenPrs = [...openPrsByRepo.values()].flat();
-    const { responses, readyToAssignment } = await computeResponses(deps, nowIso, allOpenPrs);
+    const { responses, openedToAssignment } = await computeResponses(deps, nowIso, allOpenPrs);
     await deps.store.writeResponseReport({
       takenAt: nowIso,
       responses,
-      readyToAssignment,
+      openedToAssignment,
     });
   }
 

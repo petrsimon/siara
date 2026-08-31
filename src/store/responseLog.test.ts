@@ -46,11 +46,11 @@ const REPORT: ResponseTimeReport = {
       waitingHours: 120,
     },
   ],
-  readyToAssignment: [
+  openedToAssignment: [
     {
       repo: "org/repo",
       pr: 9,
-      readyAt: "2026-08-20T00:00:00.000Z",
+      openedAt: "2026-08-20T00:00:00.000Z",
       assignedAt: "2026-08-21T12:00:00.000Z",
       reviewer: "dave",
       latencyHours: 36,
