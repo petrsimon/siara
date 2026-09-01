@@ -13,6 +13,14 @@
 set -euo pipefail
 
 mode="${1:-}"
+
+# When invoked from a non-interactive shell, load the exported key from the
+# user's zsh environment if it was not already passed to this process.
+if [ -z "${SIARA_LOG_KEY:-}" ] && command -v zsh >/dev/null 2>&1; then
+  SIARA_LOG_KEY="$(zsh -ic 'printf %s "${SIARA_LOG_KEY:-}" >&3' 3>&1 >/dev/null 2>/dev/null)"
+  export SIARA_LOG_KEY
+fi
+
 : "${SIARA_LOG_KEY:?Set SIARA_LOG_KEY (out-of-band shared secret; same value as the CI secret)}"
 
 BUNDLE="data.enc"
